@@ -14,15 +14,24 @@ import interfaces.mmu8b;
 import derelict.openal.al;
 
 
-pragma(msg, "TODO: support stereo sound and SO1/SO2 (sound output terminal)");
-pragma(msg, "TODO: fix issue with real time sound (OpenAL latency problems) => mix sound mannually ?");
-pragma(msg, "TODO: real time adaptation of played sounds using sound I/O ports => mix sound mannually ?");
+pragma(msg, "TODO: Only power-of-two frequencies (or those which divide the chosen final frequency) are well played because of the nearest interpolation (frequencies are implicitly adapted to fit well)");
+pragma(msg, "TODO: Sound frequency should be arround 2.4% faster on SGB (not done here) causing wrong notes");
+pragma(msg, "TODO: See bug with frequency sweeping (cf pokemon silver)");
+pragma(msg, "TODO: Check the value of the channel1_volumeEnvelope: test n°1 say 0x00, GCB manual say nothing (default: 0xF3)");
 pragma(msg, "TODO: support additionnal Vin (NR50)");
-pragma(msg, "TODO: cf. issue with loop & sweep enabled together");
+pragma(msg, "TODO: Is there an issue with loop & sweep enabled together ?");
 final class GbcSoundController : Mmu8bItf
 {
     private:
 
+    struct SoundValue
+    {
+        // Normalized values in [-1.0f, 1.0f]
+        float left;
+        float right;
+    }
+
+    immutable bool useCgb;
     immutable uint cpuFrequency = 4_194_304;
     ubyte channel1_sweep = 0x80;
     ubyte channel1_soundLength = 0xBF;
@@ -47,18 +56,27 @@ final class GbcSoundController : Mmu8bItf
     ubyte soundOutput = 0xF3;
     ubyte soundEnabled = 0xF0; // 0xF1 for GB, 0xF0 for SGB
     float[32768] randomValues;
-    uint[4] channelCountdown = 0;
     uint internalClock = 0;
+    immutable uint clockStep = 16; // Must be a power of two (1=useless, 2=perfect/very-slow, 4..16=good/slow, 32..64=medium/fast, 128+=bad/very-fast)
+    immutable uint maxInternalClock = 4_194_304; // Must divisible by all the frequency used in this module
+    immutable uint bufferCount = 8; // 2: double buffering (minimum & synchronized), 3: triple buffering (medium)... But higher values increase latency
+    immutable uint soundFrequency = cpuFrequency / clockStep; // Generally: perfect=65536, good=48000, medium=32768, bad=16384
+    immutable uint soundBufferSize = 65536 / clockStep * 2; // final buffer size (stereo sound), small values cause performance issues, high values cause a high latency
+    uint bufferCur = 0;
+    uint[4] channelCur = 0;
     ALCdevice* device;
     ALCcontext* context;
-    uint[4] channels;
-    uint[4] buffers;
+    uint alSource;
+    uint[bufferCount] alBuffers;
+    short[soundBufferSize][bufferCount] soundBuffers;
 
 
     public:
 
-    this()
+    this(bool cgbMode)
     {
+        useCgb = cgbMode;
+
         // DerelictAL initialization
 
         DerelictAL.load();
@@ -98,44 +116,60 @@ final class GbcSoundController : Mmu8bItf
 
         // Sound sources initialization
 
-        alGenSources(channels.length, channels.ptr);
+        alGenSources(1, &alSource);
         checkErrors("Unable to create OpenAL sound sources");
 
-        foreach(ref uint channel ; channels)
-        {
-            alSourcef(channel, AL_PITCH, 1.0f);
-            checkErrors("Unable to configure an OpenAL sound source");
+        alSourcef(alSource, AL_PITCH, 1.0f);
+        checkErrors("Unable to configure an OpenAL sound source");
 
-            alSourcef(channel, AL_GAIN, 1.0f);
-            checkErrors("Unable to configure an OpenAL sound source");
+        alSourcef(alSource, AL_GAIN, 1.0f);
+        checkErrors("Unable to configure an OpenAL sound source");
 
-            alSource3f(channel, AL_POSITION, 0.0, 1.0, 1.0);
-            checkErrors("Unable to configure an OpenAL sound source");
+        alSource3f(alSource, AL_POSITION, 0.0, 1.0, 1.0);
+        checkErrors("Unable to configure an OpenAL sound source");
 
-            alSource3f(channel, AL_VELOCITY, 0.0, 0.0, 0.0);
-            checkErrors("Unable to configure an OpenAL sound source");
-        }
+        alSource3f(alSource, AL_VELOCITY, 0.0, 0.0, 0.0);
+        checkErrors("Unable to configure an OpenAL sound source");
 
 
         // Buffers initialization
 
-        alGenBuffers(buffers.length, buffers.ptr);
+        alGenBuffers(alBuffers.length, alBuffers.ptr);
         checkErrors("Unable to create OpenAL sound buffers");
-
+/*
+        foreach(uint i ; 0..bufferCount)
+        {
+            alBufferData(alBuffers[i], AL_FORMAT_STEREO16, soundBuffers[i].ptr, cast(int)(soundBuffers[i].length*short.sizeof), soundFrequency);
+            checkErrors(format("Unable to bind the data of an OpenAL sound buffer (buffer %d)", i+1));
+        }
+*/
 
         // Data and registers initialization
 
         foreach(int i ; 0..randomValues.length)
-            randomValues[i] = uniform(0.5f, 255.5f);
+            randomValues[i] = uniform(-1.0f, 1.0f);
+
+        if(useCgb)
+        {
+            channel3_wavePatternRam =   [
+                                            0x84, 0x40, 0x43, 0xAA, 0x2D, 0x78, 0x92, 0x3C, 
+                                            0x60, 0x59, 0x59, 0xB0, 0x34, 0xB8, 0x2E, 0xDA
+                                        ];
+        }
+        else
+        {
+            channel3_wavePatternRam =   [
+                                            0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF,
+                                            0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF
+                                        ];
+        }
     }
 
     ~this()
     {
-        foreach(uint channelId ; 0..channels.length)
-            alSourceStop(channels[channelId]);
-
-        alDeleteSources(channels.length, channels.ptr);
-        alDeleteBuffers(buffers.length, buffers.ptr);
+        alSourceStop(alSource);
+        alDeleteSources(1, &alSource);
+        alDeleteBuffers(alBuffers.length, alBuffers.ptr);
         alcDestroyContext(context);
         alcCloseDevice(device);
     }
@@ -144,10 +178,12 @@ final class GbcSoundController : Mmu8bItf
     {
         channel1_sweep = 0x80;
         channel1_soundLength = 0x3F;
+        pragma(msg, "TODO: Check the value of the channel1_volumeEnvelope: test n°1 say 0x00, GCB manual say nothing (default: 0xF3)");
         channel1_volumeEnvelope = 0x00;
         channel1_frequencyLo = 0xFF;
         channel1_frequencyHi = 0xBF;
         channel2_soundLength = 0x3F;
+        pragma(msg, "TODO: Check the value of the channel2_volumeEnvelope: test n°1 say 0x00, GCB manual say nothing (default: 0xF3)");
         channel2_volumeEnvelope = 0x00;
         channel2_frequencyLo = 0xFF;
         channel2_frequencyHi = 0xBF;
@@ -164,55 +200,16 @@ final class GbcSoundController : Mmu8bItf
         soundOutput = 0x00;
         soundEnabled = 0x70;
 
-        foreach(uint channelId ; 0..channels.length)
-        {
-            alSourcei(channels[channelId], AL_BUFFER, 0);
-            checkErrors(format("Unable to unbind the sound buffer of an OpenAL sound (channel %d)", channelId+1));
-        }
-    }
+        //alSourcei(alSource, AL_BUFFER, 0);
+        //checkErrors("Unable to unbind the sound buffer of an OpenAL sound");
 
-    void playOnChannel(uint channelId)
-    {
-        alSourceStop(channels[channelId]);
-        checkErrors(format("Unable to stop an OpenAL sound (channel %d)", channelId+1));
-
-        alSourcePlay(channels[channelId]);
-        checkErrors(format("Unable to play an OpenAL sound (channel %d)", channelId+1));
-    }
-
-    void playNewOnChannel(uint channelId, ubyte[] soundBuffer, uint frequency, bool loop)
-    {
-        alSourceStop(channels[channelId]);
-        checkErrors(format("Unable to stop an OpenAL sound (channel %d)", channelId+1));
-
-        alSourcei(channels[channelId], AL_BUFFER, 0);
-        checkErrors(format("Unable to unbind the sound buffer of an OpenAL sound (channel %d)", channelId+1));
-
-        alBufferData(buffers[channelId], AL_FORMAT_MONO8, soundBuffer.ptr, cast(int)soundBuffer.length, frequency);
-        checkErrors(format("Unable to bind the data of an OpenAL sound buffer (channel %d)", channelId+1));
-
-        alSourcei(channels[channelId], AL_BUFFER, buffers[channelId]);
-        checkErrors(format("Unable to bind the sound buffer to an OpenAL sound (channel %d)", channelId+1));
-
-        alSourcei(channels[channelId], AL_LOOPING, loop);
-        checkErrors(format("Unable to set the loop mode of an OpenAL sound (channel %d)", channelId+1));
-
-        alSourcePlay(channels[channelId]);
-        checkErrors(format("Unable to play an OpenAL sound (channel %d)", channelId+1));
-
-        channelCountdown[channelId] = cast(uint)(soundBuffer.length * cast(ulong)cpuFrequency / frequency);
-    }
-
-    void stopChannel(uint channelId)
-    {
-        alSourceStop(channels[channelId]);
-        checkErrors(format("Unable to stop an OpenAL sound (channel %d)", channelId+1));
-
-        channelCountdown[channelId] = 0;
+        //alSourcePlay(alSource);
+        //checkErrors("Unable to play an OpenAL sound");
     }
 
     ubyte loadByte(ushort address)
     {
+//writefln("DEBUG: read(address: %0.2X)", address);
         switch(address)
         {
             // Channel 1 Sweep register
@@ -261,7 +258,6 @@ final class GbcSoundController : Mmu8bItf
 
             // Nothing
             case 0xFF1B:
-                pragma(msg, "TODO: port access allowed in read mode ? tests say no !");
                 return 0xFF;
 
             // Channel 3 Select output level
@@ -307,20 +303,7 @@ final class GbcSoundController : Mmu8bItf
 
             // Sound on/off
             case 0xFF26:
-                int isPlaying;
-                ubyte result = soundEnabled;
-
-                foreach(uint channelId ; 0..4)
-                {
-                    //alGetSourcei(channels[channelId], AL_SOURCE_STATE, &isPlaying);
-                    //if(isPlaying == AL_PLAYING)
-                    //    result |= 1 << channelId;
-
-                    if(channelCountdown[channelId] > 0)
-                        result |= 1 << channelId;
-                }
-
-                return result;
+                return soundEnabled;
 
             // Nothing
             case 0xFF27: .. case 0xFF2F:
@@ -337,9 +320,7 @@ final class GbcSoundController : Mmu8bItf
 
     void saveByte(ushort address, ubyte value)
     {
-        pragma(msg, "DEBUG");
-        //writefln("GbcSoundController::saveByte(0x%0.4X, 0x%0.2X/0b%0.8b)", address, value, value);
-
+//writefln("DEBUG: write(address: %0.2X, value: %0.2X)", address, value);
         switch(address)
         {
             // Channel 1 Sweep register
@@ -357,7 +338,13 @@ final class GbcSoundController : Mmu8bItf
             // Channel 1 Volume Envelope
             case 0xFF12:
                 if((soundEnabled & 0b10000000) != 0)
+                {
                     channel1_volumeEnvelope = value;
+
+                    pragma(msg, "TODO: Check if channel sound should be disabled when the volume is set to 0 and the volume is decreased (cf test 2 passed)");
+                    if((channel1_volumeEnvelope & 0b11110000) == 0 && (channel1_volumeEnvelope & 0b00001000) == 0)
+                        soundEnabled &= 0b11111110;
+                }
                 break;
 
             // Channel 1 Frequency lo
@@ -374,72 +361,14 @@ final class GbcSoundController : Mmu8bItf
 
                     if((channel1_frequencyHi & 0b10000000) != 0)
                     {
-                        // Sound sweep
-                        const bool sweepEnabled = (channel1_sweep & 0b01110000) != 0;
-                        const float sweepTime = ((channel1_sweep & 0b01110000) >> 4) / 128.0f;
-                        const bool sweepIncreased = (channel1_sweep & 0b0001000) == 0;
-                        const uint sweepShiftCount = channel1_sweep & 0b0000111;
-                        pragma(msg, "TODO: sound frequency variation not yet supported (channel 1)");
-
-                        if(sweepEnabled)
-                            writeln("WARNING: sweep on channel 1 is not yet supported");
-
-                        // Sound length & sound wave pattern
-                        const float length = (64 - (channel1_soundLength & 0b00111111)) / 256.0f;
-                        immutable float[8] wavePattern =    [
-                                                                [-1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
-                                                                [-1.0f, -1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
-                                                                [-1.0f, -1.0f, -1.0f, -1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
-                                                                [-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, +1.0f, +1.0f], 
-                                                            ][channel1_soundLength >> 6];
-
-                        // Sound envelope
-                        const float initialVolume = (channel1_volumeEnvelope >> 4) / 15.0f;
-                        const bool increaseVolume = (channel1_volumeEnvelope & 0b00001000) != 0;
-                        const float sign = (increaseVolume) ? 1.0f : -1.0f;
-                        const uint sweepCount = channel1_volumeEnvelope & 0b00000111;
-                        const float stepLength = sweepCount / 64.0f;
-
-                        // Sound frequency
-                        const uint tmpFrequency = ((channel1_frequencyHi & 0b00000111) << 8) | channel1_frequencyLo;
-                        const uint frequency = 131072 / (2048 - tmpFrequency);
-                        const uint realFrequency = frequency * 8; // take into account the wave pattern
-
-                        const bool loop = (channel1_frequencyHi & 0b01000000) == 0;
-
-                        const uint bufferSize = cast(uint)(length * realFrequency);
-                        ubyte[] soundBuff = new ubyte[bufferSize];
-
-                        float volume = initialVolume;
-
-                        pragma(msg, "SO1/SO2 not fully supported");
-                        const float so1Volume = (((channelControl & 0b01110000) >> 4) * (soundOutput & 0b00000001)) / 7.0f;
-                        const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b00010000) >> 4)) / 7.0f;
-                        const float globalVolume = (so1Volume + so2Volume) / 2.0f;
-
-                        if(sweepCount > 0)
+                        pragma(msg, "TODO: Check if channel sound should not be enabled when the volume is set to 0 and the volume is decreased (cf test 2 passed)");
+                        if((channel1_volumeEnvelope & 0b11110000) != 0 || (channel1_volumeEnvelope & 0b00001000) != 0)
                         {
-                            const uint stepSize = cast(uint)(stepLength * realFrequency);
+                            soundEnabled |= 0b00000001;
 
-                            foreach(int i ; 0..bufferSize)
-                            {
-                                if(i % stepSize == stepSize-1)
-                                    volume = fmin(fmax(volume + sign / 15.0f, 0.0f), 1.0f); // valid step ?
-
-                                const float soundValue = wavePattern[i%8] * 127.0f * volume * globalVolume + 127.0f;
-                                soundBuff[i] = cast(ubyte)fmin(fmax(soundValue, 0.5f), 255.5f);
-                            }
+                            if((channel1_frequencyHi & 0b01000000) == 0)
+                                channel1_soundLength &= 0b11000000;
                         }
-                        else
-                        {
-                            foreach(int i ; 0..bufferSize)
-                            {
-                                const float soundValue = wavePattern[i%8] * 127.0f * globalVolume + 127.0f;
-                                soundBuff[i] = cast(ubyte)fmin(fmax(soundValue, 0.5f), 255.5f);
-                            }
-                        }
-
-                        playNewOnChannel(0, soundBuff, realFrequency, loop);
                     }
                 }
                 break;
@@ -457,7 +386,13 @@ final class GbcSoundController : Mmu8bItf
             // Channel 2 Volume Envelope
             case 0xFF17:
                 if((soundEnabled & 0b10000000) != 0)
+                {
                     channel2_volumeEnvelope = value;
+
+                    pragma(msg, "TODO: Check if channel sound should be disabled when the volume is set to 0 and the volume is decreased (cf test 2 passed)");
+                    if((channel2_volumeEnvelope & 0b11110000) == 0 && (channel2_volumeEnvelope & 0b00001000) == 0)
+                        soundEnabled &= 0b11111101;
+                }
                 break;
 
             // Channel 2 Frequency lo data
@@ -474,62 +409,14 @@ final class GbcSoundController : Mmu8bItf
 
                     if((channel2_frequencyHi & 0b10000000) != 0)
                     {
-                        // Sound length & sound wave pattern
-                        const float length = (64 - (channel2_soundLength & 0b00111111)) / 256.0f;
-                        immutable float[8] wavePattern =    [
-                                                                [-1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
-                                                                [-1.0f, -1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
-                                                                [-1.0f, -1.0f, -1.0f, -1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
-                                                                [-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, +1.0f, +1.0f], 
-                                                            ][channel2_soundLength >> 6];
-
-                        // Sound envelope
-                        const float initialVolume = (channel2_volumeEnvelope >> 4) / 15.0f;
-                        const bool increaseVolume = (channel2_volumeEnvelope & 0b00001000) != 0;
-                        const float sign = (increaseVolume) ? 1.0f : -1.0f;
-                        const uint sweepCount = channel2_volumeEnvelope & 0b00000111;
-                        const float stepLength = sweepCount / 64.0f;
-
-                        // Sound frequency
-                        const uint tmpFrequency = ((channel2_frequencyHi & 0b00000111) << 8) | channel2_frequencyLo;
-                        const uint frequency = 131072 / (2048 - tmpFrequency);
-                        const uint realFrequency = frequency * 8; // take into account the wave pattern
-
-                        const bool loop = (channel2_frequencyHi & 0b01000000) == 0;
-
-                        const uint bufferSize = cast(uint)(length * realFrequency);
-                        ubyte[] soundBuff = new ubyte[bufferSize];
-
-                        float volume = initialVolume;
-
-                        pragma(msg, "SO1/SO2 not fully supported");
-                        const float so1Volume = (((channelControl & 0b01110000) >> 4) * ((soundOutput & 0b00000010) >> 1)) / 7.0f;
-                        const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b00100000) >> 5)) / 7.0f;
-                        const float globalVolume = (so1Volume + so2Volume) / 2.0f;
-
-                        if(sweepCount > 0)
+                        pragma(msg, "TODO: Check if channel sound should not be enabled when the volume is set to 0 and the volume is decreased (cf test 2 passed)");
+                        if((channel2_volumeEnvelope & 0b11110000) != 0 || (channel2_volumeEnvelope & 0b00001000) != 0)
                         {
-                            const uint stepSize = cast(uint)(stepLength * realFrequency);
+                            soundEnabled |= 0b00000010;
 
-                            foreach(int i ; 0..bufferSize)
-                            {
-                                if(i % stepSize == 0)
-                                    volume = fmin(fmax(volume + sign / 15.0f, 0.0f), 1.0f); // valid step ?
-
-                                const float soundValue = wavePattern[i%8] * 127.0f * volume * globalVolume + 127.0f;
-                                soundBuff[i] = cast(ubyte)fmin(fmax(soundValue, 0.5f), 255.5f);
-                            }
+                            if((channel2_frequencyHi & 0b01000000) == 0)
+                                channel2_soundLength &= 0b11000000;
                         }
-                        else
-                        {
-                            foreach(int i ; 0..bufferSize)
-                            {
-                                const float soundValue = wavePattern[i%8] * 127.0f * globalVolume + 127.0f;
-                                soundBuff[i] = cast(ubyte)fmin(fmax(soundValue, 0.5f), 255.5f);
-                            }
-                        }
-
-                        playNewOnChannel(1, soundBuff, realFrequency, loop);
                     }
                 }
                 break;
@@ -537,14 +424,7 @@ final class GbcSoundController : Mmu8bItf
             // Channel 3 Sound on/off
             case 0xFF1A:
                 if((soundEnabled & 0b10000000) != 0)
-                {
                     channel3_soundOnOff = value | 0b01111111;
-
-                    if((channel3_soundOnOff & 0b10000000) == 0)
-                        stopChannel(2);
-                    else
-                        playOnChannel(2);
-                }
                 break;
 
             // Channel 3 Sound Length
@@ -557,7 +437,13 @@ final class GbcSoundController : Mmu8bItf
             // Channel 3 Select output level
             case 0xFF1C:
                 if((soundEnabled & 0b10000000) != 0)
+                {
                     channel3_volume = value | 0b10011111;
+                    
+                    pragma(msg, "TODO: Check if channel sound should be disabled when the volume is set to 0 and the sound stoped (cf test 2 passed)");
+                    if((channel3_volume & 0b01100000) == 0 && (channel3_soundOnOff & 0b10000000) == 0)
+                        soundEnabled &= 0b11111011;
+                }
                 break;
 
             // Channel 3 Frequency's lower data
@@ -574,34 +460,14 @@ final class GbcSoundController : Mmu8bItf
 
                     if((channel3_frequencyHi & 0b10000000) != 0)
                     {
-                        // Sound length & sound wave pattern
-                        const float length = (256 - channel3_soundLength) / 256.0f;
-
-                        // Sound frequency
-                        const uint tmpFrequency = ((channel3_frequencyHi & 0b00000111) << 8) | channel3_frequencyLo;
-                        const uint frequency = 65536 / (2048 - tmpFrequency);
-                        const uint realFrequency = frequency * 32; // take into account the wave pattern
-
-                        const bool loop = (channel3_frequencyHi & 0b01000000) == 0;
-
-                        const uint bufferSize = cast(uint)(length * realFrequency);
-                        ubyte[] soundBuff = new ubyte[bufferSize];
-
-                        const float volume = [0.0f, 1.0f, 0.5f, 0.25f][(channel3_volume & 0b01100000) >> 5];
-
-                        pragma(msg, "SO1/SO2 not fully supported");
-                        const float so1Volume = (((channelControl & 0b01110000) >> 4) * ((soundOutput & 0b00000100) >> 2)) / 7.0f;
-                        const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b01000000) >> 6)) / 7.0f;
-                        const float globalVolume = (so1Volume + so2Volume) / 2.0f;
-
-                        foreach(int i ; 0..bufferSize)
+                        pragma(msg, "TODO: Check if channel sound should not be enabled when the volume is set to 0 and the sound stoped (cf test 2 passed)");
+                        if((channel3_volume & 0b01100000) != 0 || (channel3_soundOnOff & 0b10000000) != 0)
                         {
-                            const ubyte userValue = ((channel3_wavePatternRam[(i/2)%16]>>(4-(i%2)*4)) & 0b00001111) * 16;
-                            const float soundValue = (userValue - 127.0f) * volume * globalVolume + 127.0f;
-                            soundBuff[i] = cast(ubyte)fmin(fmax(soundValue, 0.5f), 255.5f);
-                        }
+                            soundEnabled |= 0b00000100;
 
-                        playNewOnChannel(2, soundBuff, realFrequency, loop);
+                            if((channel3_frequencyHi & 0b01000000) == 0)
+                                channel3_soundLength &= 0;
+                        }
                     }
                 }
                 break;
@@ -619,7 +485,13 @@ final class GbcSoundController : Mmu8bItf
             // Channel 4 Volume Envelope
             case 0xFF21:
                 if((soundEnabled & 0b10000000) != 0)
+                {
                     channel4_volumeEnvelope = value;
+
+                    pragma(msg, "TODO: Check if channel sound should be disabled when the volume is set to 0 and the volume is decreased (cf test 2 passed)");
+                    if((channel4_volumeEnvelope & 0b11110000) == 0 && (channel4_volumeEnvelope & 0b00001000) == 0)
+                        soundEnabled &= 0b11110111;
+                }
                 break;
 
             // Channel 4 Polynomial Counter
@@ -636,64 +508,14 @@ final class GbcSoundController : Mmu8bItf
 
                     if((channel4_control & 0b10000000) != 0)
                     {
-                        // Sound length
-                        const float length = (64 - (channel4_soundLength & 0b00111111)) / 256.0f;
-
-                        // Sound envelope
-                        const float initialVolume = (channel4_volumeEnvelope >> 4) / 15.0f;
-                        const bool volumeIncreased = (channel4_volumeEnvelope & 0b00001000) != 0;
-                        const float sign = (volumeIncreased) ? 1.0f : -1.0f;
-                        const uint sweepCount = channel4_volumeEnvelope & 0b00000111;
-                        const float stepLength = sweepCount / 64.0f;
-
-                        // Sound frequency
-                        const uint freqShift = min((channel4_polynomialCounter >> 4) + 1, 14);
-                        const uint counterBits = (channel4_polynomialCounter & 0b00001000) == 0 ? 15 : 7;
-                        const uint counterMask = (1 << counterBits) - 1;
-                        const float freqDivider = fmax(channel4_polynomialCounter & 0b00000111, 0.5f);
-                        const uint frequency = cast(uint)(524288.0f / freqDivider) >> freqShift;
-                        const uint realFrequency = frequency;
-
-                        const bool loop = (channel4_control & 0b01000000) == 0;
-
-                        const uint bufferSize = cast(uint)(length * realFrequency);
-                        ubyte[] soundBuff = new ubyte[bufferSize];
-
-                        float volume = initialVolume;
-
-                        // Stereo loud speakers
-                        pragma(msg, "SO1/SO2 not fully supported");
-                        const float so1Volume = (((channelControl & 0b01110000) >> 4) * ((soundOutput & 0b00001000) >> 3)) / 7.0f;
-                        const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b10000000) >> 7)) / 7.0f;
-                        const float globalVolume = (so1Volume + so2Volume) / 2.0f;
-
-                        if(sweepCount > 0)
+                        pragma(msg, "TODO: Check if channel sound should not be enabled when the volume is set to 0 and the volume is decreased (cf test 2 passed)");
+                        if((channel4_volumeEnvelope & 0b11110000) != 0 || (channel4_volumeEnvelope & 0b00001000) != 0)
                         {
-                            const uint stepSize = cast(uint)(stepLength * realFrequency);
-                            int k = 0;
+                            soundEnabled |= 0b00001000;
 
-                            foreach(int i ; 0..bufferSize)
-                            {
-                                if(++k == stepSize)
-                                {
-                                    volume = fmin(fmax(volume + sign / 15.0f, 0.0f), 1.0f); // valid step ?
-                                    k = 0;
-                                }
-
-                                const float soundValue = (randomValues[i & counterMask] - 127.0f) * volume * globalVolume + 127.0f;
-                                soundBuff[i] = cast(ubyte)fmin(fmax(soundValue, 0.5f), 255.5f);
-                            }
+                            if((channel4_control & 0b01000000) == 0)
+                                channel4_soundLength &= 0b11000000;
                         }
-                        else
-                        {
-                            foreach(int i ; 0..bufferSize)
-                            {
-                                const float soundValue = (randomValues[i & counterMask] - 127.0f) * globalVolume + 127.0f;
-                                soundBuff[i] = cast(ubyte)fmin(fmax(soundValue, 0.5f), 255.5f);
-                            }
-                        }
-
-                        playNewOnChannel(3, soundBuff, realFrequency, loop);
                     }
                 }
                 break;
@@ -712,18 +534,12 @@ final class GbcSoundController : Mmu8bItf
 
             // Sound on/off
             case 0xFF26:
-                soundEnabled = (soundEnabled | 0b10000000) & (value | 0b01111111);
+                soundEnabled = (soundEnabled & 0b01111111) | (value & 0b10000000);
 
                 if((soundEnabled & 0b10000000) == 0)
                 {
-                    foreach(uint channelId ; 0..channels.length)
-                        if((soundEnabled << channelId) & 0b00000001)
-                            stopChannel(channelId);
-
-                    foreach(uint channelId ; 0..channels.length)
-                        stopChannel(channelId);
-
                     resetRegisters();
+                    soundEnabled = 0b01110000;
                 }
                 break;
 
@@ -742,27 +558,406 @@ final class GbcSoundController : Mmu8bItf
         }
     }
 
-    void tick()
+    SoundValue tickChannel1()
     {
-        internalClock++;
+        const bool loop = (channel1_frequencyHi & 0b01000000) == 0;
+        float soundValue = 0.0f;
 
-        if(internalClock % 8 == 0)
+        if((soundEnabled & 0b00000001) != 0)
         {
-            if((soundEnabled & 0b10000000) != 0)
+            // Sound sweep
+            const float sweepTime = (channel1_sweep & 0b01110000) >> 4;
+            const bool sweepIncreased = (channel1_sweep & 0b0001000) == 0;
+            const uint sweepShiftCount = channel1_sweep & 0b0000111;
+
+            // Sound length & sound wave pattern
+            static float[][] wavePatterns = [
+                                                [-1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
+                                                [-1.0f, -1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
+                                                [-1.0f, -1.0f, -1.0f, -1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
+                                                [-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, +1.0f, +1.0f], 
+                                            ];
+            immutable float[8] wavePattern = wavePatterns[channel1_soundLength >> 6];
+
+            // Sound envelope
+            const uint initialVolume = channel1_volumeEnvelope >> 4;
+            const bool volumeIncreased = (channel1_volumeEnvelope & 0b00001000) != 0;
+            const uint sweepCount = channel1_volumeEnvelope & 0b00000111;
+
+            // Sound frequency
+            const uint tmpFrequency = ((channel1_frequencyHi & 0b00000111) << 8) | channel1_frequencyLo;
+            const uint frequency = 131072 / (2048 - tmpFrequency);
+            const uint realFrequency = frequency * 8; // take into account the wave pattern
+
+            // Stereo loud speakers
+            const float so1Volume = (((channelControl & 0b01110000) >> 4) * (soundOutput & 0b00000001)) / 7.0f;
+            const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b00010000) >> 4)) / 7.0f;
+            const float globalVolume = (so1Volume + so2Volume) / 2.0f;
+
+            if(realFrequency <= soundFrequency)
             {
-                foreach(uint channelId ; 0..channelCountdown.length)
+                const float volume = initialVolume / 15.0f;
+                const uint cur = (channelCur[0] / (soundFrequency / realFrequency)) % 8;
+                soundValue = wavePattern[cur] * volume * globalVolume;
+                channelCur[0]++;
+
+                pragma(msg, "TODO: To check - enable even with disabled sound ?");
+                if(channelCur[0] == 8 * (soundFrequency / realFrequency))
+                    channelCur[0] = 0;
+            }
+            else
+            {
+                if(internalClock % 4096 == 0)
+                    writeln("WARNING: sound not played on channel 1 (frequency to high)");
+            }
+
+            if(sweepCount != 0 && internalClock % (cpuFrequency / 64) == 0)
+            {
+                pragma(msg, "TODO: To check - Possible bug with the modulo since sweepCount is not a power of two and internalClock is reset every 2**22");
+                if((internalClock / (cpuFrequency / 64)) % sweepCount == 0)
                 {
-                    if(channelCountdown[channelId] >= 8)
+                    if(volumeIncreased && initialVolume != 15)
+                        channel1_volumeEnvelope += 1 << 4;
+
+                    else if(!volumeIncreased && initialVolume != 0)
+                        channel1_volumeEnvelope -= 1 << 4;
+                }
+            }
+
+            pragma(msg, "TODO: Check if the frequency sweeping work fine");
+            if(sweepTime != 0 && internalClock % (cpuFrequency / 128) == 0)
+            {
+                pragma(msg, "TODO: To check - Possible bug with the modulo since sweepShiftCount is not a power of two and internalClock is reset every 2**22");
+                if((internalClock / (cpuFrequency / 128)) % sweepTime == 0)
+                {
+                    if(sweepIncreased)
                     {
-                        channelCountdown[channelId] -= 8;
+                        const uint newFrequency = frequency + (frequency >> sweepShiftCount);
+
+                        if(newFrequency <= 131072)
+                        {
+                            const uint newFrequencyRegister = max(2048 - 131072 / newFrequency - 1, 0);
+                            channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
+                            channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+                        }
+                        else
+                        {
+                            pragma(msg, "TODO: To check - disable other registers ?");
+                            soundEnabled &= 0b11111110;
+                        }
                     }
                     else
                     {
-                        channelCountdown[channelId] = 0;
-                        //stopChannel(channelId);
+                        const uint newFrequency = frequency - (frequency >> sweepShiftCount);
+
+                        if(newFrequency >= 64)
+                        {
+                            const uint newFrequencyRegister = min(2048 - 131072 / newFrequency + 1, 2047);
+                            channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
+                            channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+                        }
                     }
                 }
             }
+        }
+
+        if(!loop && internalClock % 16384 == 8192)
+        {
+            if((channel1_soundLength & 0b00111111) == 0b00111111)
+            {
+                soundEnabled &= 0b11111110;
+                channel1_frequencyHi &= 0b01111111;
+            }
+
+            channel1_soundLength = (channel1_soundLength & 0b11000000) | ((channel1_soundLength + 1) & 0b00111111);
+        }
+
+        return SoundValue(soundValue, soundValue);
+    }
+
+    SoundValue tickChannel2()
+    {
+        const bool loop = (channel2_frequencyHi & 0b01000000) == 0;
+        float soundValue = 0.0f;
+
+        if((soundEnabled & 0b00000010) != 0)
+        {
+            // Sound length & sound wave pattern
+            static float[][] wavePatterns = [
+                                                [-1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
+                                                [-1.0f, -1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
+                                                [-1.0f, -1.0f, -1.0f, -1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
+                                                [-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, +1.0f, +1.0f], 
+                                            ];
+            immutable float[8] wavePattern = wavePatterns[channel2_soundLength >> 6];
+
+            // Sound envelope
+            const uint initialVolume = channel2_volumeEnvelope >> 4;
+            const bool volumeIncreased = (channel2_volumeEnvelope & 0b00001000) != 0;
+            const uint sweepCount = channel2_volumeEnvelope & 0b00000111;
+
+            // Sound frequency
+            const uint tmpFrequency = ((channel2_frequencyHi & 0b00000111) << 8) | channel2_frequencyLo;
+            const uint frequency = 131072 / (2048 - tmpFrequency);
+            const uint realFrequency = frequency * 8; // take into account the wave pattern
+
+            // Stereo loud speakers
+            const float so1Volume = (((channelControl & 0b01110000) >> 4) * ((soundOutput & 0b00000010) >> 1)) / 7.0f;
+            const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b00100000) >> 5)) / 7.0f;
+            const float globalVolume = (so1Volume + so2Volume) / 2.0f;
+
+            if(realFrequency <= soundFrequency)
+            {
+                const float volume = initialVolume / 15.0f;
+                const uint cur = (channelCur[1] / (soundFrequency / realFrequency)) % 8;
+                soundValue = wavePattern[cur] * volume * globalVolume;
+                channelCur[1]++;
+
+                pragma(msg, "TODO: To check - enable even with disabled sound ?");
+                if(channelCur[1] == 8 * (soundFrequency / realFrequency))
+                    channelCur[1] = 0;
+            }
+            else
+            {
+                if(internalClock % 4096 == 0)
+                    writeln("WARNING: sound not played on channel 2 (frequency to high)");
+            }
+
+            if(sweepCount != 0 && internalClock % (cpuFrequency / 64) == 0)
+            {
+                pragma(msg, "TODO: To check - Possible bug with the modulo since sweepCount is not a power of two and internalClock is reset every 2**22");
+                if((internalClock / (cpuFrequency / 64)) % sweepCount == 0)
+                {
+                    if(volumeIncreased && initialVolume != 15)
+                        channel2_volumeEnvelope += 1 << 4;
+
+                    else if(!volumeIncreased && initialVolume != 0)
+                        channel2_volumeEnvelope -= 1 << 4;
+                }
+            }
+        }
+
+        if(!loop && internalClock % 16384 == 8192)
+        {
+            if((channel2_soundLength & 0b00111111) == 0b00111111)
+            {
+                soundEnabled &= 0b11111101;
+                channel2_frequencyHi &= 0b01111111;
+            }
+
+            channel2_soundLength = (channel2_soundLength & 0b11000000) | ((channel2_soundLength + 1) & 0b00111111);
+        }
+
+        return SoundValue(soundValue, soundValue);
+    }
+
+    SoundValue tickChannel3()
+    {
+        const bool loop = (channel3_frequencyHi & 0b01000000) == 0;
+        float soundValue = 0.0f;
+
+        if((soundEnabled & 0b00000100) != 0)
+        {
+            // Sound frequency
+            const uint tmpFrequency = ((channel3_frequencyHi & 0b00000111) << 8) | channel3_frequencyLo;
+            const uint frequency = 65536 / (2048 - tmpFrequency);
+            const uint realFrequency = frequency * 32; // take into account the wave pattern
+
+            // Volume
+            static float[] volumeLevels = [0.0f, 1.0f, 0.5f, 0.25f];
+            const float volume = volumeLevels[(channel3_volume & 0b01100000) >> 5];
+
+            // Stereo loud speakers
+            const float so1Volume = (((channelControl & 0b01110000) >> 4) * ((soundOutput & 0b00000100) >> 2)) / 7.0f;
+            const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b01000000) >> 6)) / 7.0f;
+            const float globalVolume = (so1Volume + so2Volume) / 2.0f;
+
+            if(realFrequency <= soundFrequency)
+            {
+                const uint cur = (channelCur[2] / (soundFrequency / realFrequency)) % 32;
+                const ubyte userValue = (channel3_wavePatternRam[(cur/2)%16] >> (4-(cur%2)*4)) & 0b00001111;
+                soundValue = (userValue / 7.5f - 1.0f) * volume * globalVolume;
+                channelCur[2]++;
+            }
+            else
+            {
+                if(internalClock % 4096 == 0)
+                    writeln("WARNING: sound not played on channel 3 (frequency to high)");
+            }
+
+            pragma(msg, "TODO: To check - enable even with disabled sound ?");
+            if(channelCur[2] == 32 * (soundFrequency / realFrequency))
+                channelCur[2] = 0;
+        }
+
+        if(!loop && internalClock % 16384 == 8192)
+        {
+            if(channel3_soundLength == 0b11111111)
+            {
+                soundEnabled &= 0b11111011;
+                channel3_frequencyHi &= 0b01111111;
+            }
+
+            channel3_soundLength++;
+        }
+
+        return SoundValue(soundValue, soundValue);
+    }
+
+    SoundValue tickChannel4()
+    {
+        const bool loop = (channel4_control & 0b01000000) == 0;
+        float soundValue = 0.0f;
+
+        if((soundEnabled & 0b00001000) != 0)
+        {
+            // Sound envelope
+            const float initialVolume = channel4_volumeEnvelope >> 4;
+            const bool volumeIncreased = (channel4_volumeEnvelope & 0b00001000) != 0;
+            const uint sweepCount = channel4_volumeEnvelope & 0b00000111;
+
+            // Sound frequency
+            const uint freqShift = min((channel4_polynomialCounter >> 4) + 1, 14);
+            const uint counterBits = (channel4_polynomialCounter & 0b00001000) == 0 ? 15 : 7;
+            const uint counterMask = (1 << counterBits) - 1;
+            const float freqDivider = fmax(channel4_polynomialCounter & 0b00000111, 0.5f);
+            const uint frequency = cast(uint)(524288.0f / freqDivider) >> freqShift;
+
+            // Stereo loud speakers
+            const float so1Volume = (((channelControl & 0b01110000) >> 4) * ((soundOutput & 0b00001000) >> 3)) / 7.0f;
+            const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b10000000) >> 7)) / 7.0f;
+            const float globalVolume = (so1Volume + so2Volume) / 2.0f;
+
+            if(frequency > soundFrequency)
+                if(internalClock % 4096 == 0)
+                    writeln("WARNING: sound with to high frequency (channel 4)");
+
+            const float volume = initialVolume / 15.0f;
+            const uint cur = channelCur[3] / (soundFrequency / min(frequency, soundFrequency));
+
+            soundValue = randomValues[cur & counterMask] * volume * globalVolume;
+            channelCur[3]++;
+
+            pragma(msg, "TODO: To check - enable even with disabled sound ?");
+            if(cur == counterMask)
+                channelCur[3] = 0;
+
+            if(sweepCount != 0 && internalClock % (cpuFrequency / 64) == 0)
+            {
+                pragma(msg, "TODO: To check - Possible bug with the modulo since sweepCount is not a power of two and internalClock is reset every 2**22");
+                if((internalClock / (cpuFrequency / 64)) % sweepCount == 0)
+                {
+                    if(volumeIncreased && initialVolume != 15)
+                        channel4_volumeEnvelope += 1 << 4;
+
+                    else if(!volumeIncreased && initialVolume != 0)
+                        channel4_volumeEnvelope -= 1 << 4;
+                }
+            }
+        }
+
+        if(!loop && internalClock % 16384 == 8192)
+        {
+            if((channel4_soundLength & 0b00111111) == 0b00111111)
+            {
+                soundEnabled &= 0b11110111;
+                channel4_control &= 0b01111111;
+            }
+
+            channel4_soundLength = (channel4_soundLength & 0b11000000) | ((channel4_soundLength + 1) & 0b00111111);
+        }
+
+        return SoundValue(soundValue, soundValue);
+    }
+
+    SoundValue mixSound(in SoundValue[] values)
+    {
+        return SoundValue(values.map!"a.left".sum / values.length, values.map!"a.right".sum / values.length);
+    }
+
+    SoundValue normalize(in SoundValue value)
+    {
+        return SoundValue(fmin(fmax(value.left, -1.0f), 1.0f), fmin(fmax(value.right, -1.0f), 1.0f));
+    }
+
+    void tick()
+    {
+        pragma(msg, "TODO: Do not forget to decrease/increase the sound volume over time (because it can be read)");
+
+        internalClock++;
+
+        if(internalClock % clockStep == 0)
+        {
+            short bufferLeftSoundValue = 0;
+            short bufferRightSoundValue = 0;
+
+            if((soundEnabled & 0b10000000) != 0)
+            {
+                const SoundValue soundValueChan1 = tickChannel1();
+                const SoundValue soundValueChan2 = tickChannel2();
+                const SoundValue soundValueChan3 = tickChannel3();
+                const SoundValue soundValueChan4 = tickChannel4();
+
+                const float soundAmplitude = cast(float)(max(-short.min/2, short.max/2) - 1);
+                //const SoundValue soundValue = normalize(mixSound([soundValueChan1])); // see other sound
+                const SoundValue soundValue = normalize(mixSound([soundValueChan1, soundValueChan2, soundValueChan3, soundValueChan4])); // see other sound
+                bufferLeftSoundValue = cast(short)(soundValue.left * soundAmplitude);
+                bufferRightSoundValue = cast(short)(soundValue.right * soundAmplitude);
+            }
+
+            const uint buffId = (bufferCur / soundBufferSize) % bufferCount;
+            const uint localBufferCur = bufferCur % soundBufferSize;
+            soundBuffers[buffId][localBufferCur + 0] = bufferLeftSoundValue;
+            soundBuffers[buffId][localBufferCur + 1] = bufferRightSoundValue;
+            bufferCur += 2;
+
+            if(bufferCur % soundBufferSize == 0)
+            {
+                int processedBufferCount;
+                alGetSourceiv(alSource, AL_BUFFERS_PROCESSED, &processedBufferCount);
+
+                int queuedBufferCount;
+                alGetSourceiv(alSource, AL_BUFFERS_QUEUED, &queuedBufferCount);
+
+                writefln("DEBUG: queuedBufferCount=%d, processedBufferCount=%d", queuedBufferCount, processedBufferCount);
+
+                if(processedBufferCount > 0)
+                {
+                    while(processedBufferCount > 0)
+                    {
+                        alSourceUnqueueBuffers(alSource, 1, &alBuffers[(buffId+bufferCount-queuedBufferCount)%bufferCount]);
+                        checkErrors("Unable to unqueue a sound buffer to an OpenAL source");
+                        processedBufferCount--;
+                        queuedBufferCount--;
+                    }
+                }
+                else if(queuedBufferCount == bufferCount)
+                {
+                    alSourceStop(alSource);
+                    checkErrors("Unable to stop an OpenAL source");
+                    writeln("DEBUG: SOUND STREAMING TOO SLOW => BUFFER REPLACEMENT");
+                    alSourceUnqueueBuffers(alSource, 1, &alBuffers[buffId]);
+                    checkErrors("Unable to unqueue a sound buffer to an OpenAL source");
+                    alSourcePlay(alSource);
+                    checkErrors("Unable to play an OpenAL source");
+                }
+
+                alBufferData(alBuffers[buffId], AL_FORMAT_STEREO16, soundBuffers[buffId].ptr, soundBuffers[buffId].length*short.sizeof, soundFrequency);
+                checkErrors(format("Unable to bind the data of an OpenAL sound buffer (buffer %d)", buffId+1));
+                alSourceQueueBuffers(alSource, 1, &alBuffers[buffId]);
+                checkErrors("Unable to queue a sound buffer to an OpenAL source");
+
+                int state = 0;
+                alGetSourcei(alSource, AL_SOURCE_STATE, &state);
+                if(state != AL_PLAYING)
+                    alSourcePlay(alSource);
+            }
+
+            //if(bufferCur == soundBufferSize * bufferCount)
+            //    bufferCur = 0;
+
+            if(internalClock == maxInternalClock)
+                internalClock = 0;
         }
     }
 

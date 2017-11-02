@@ -91,7 +91,7 @@ void emuThread(string filename)
         auto cpu = new GbcCpu(useCgb);
         auto gpu = new GbcGpu(useCgb);
         auto mmu = new GbcMmu(useCgb);
-        auto soundController = new GbcSoundController();
+        auto soundController = new GbcSoundController(useCgb);
         auto dividerTimer = new GbcDividerTimer();
         auto timaTimer = new GbcTimaTimer();
         auto renderer = new GbcLcd();
