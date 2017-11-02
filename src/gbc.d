@@ -6,7 +6,6 @@ import core.thread;
 import core.time;
 import std.concurrency;
 import gtk.Main;
-import std.datetime;
 import std.conv;
 import std.math;
 
@@ -36,7 +35,6 @@ final class Gbc
     public:
 
     immutable uint cpuFrequency = 4_194_304;
-    immutable uint syncFrequency = 120;
 
     GbcFile cartridgeData;
     Mmu8bItf cartridgeMmu;
@@ -53,12 +51,11 @@ final class Gbc
     Tid frontendTid;
     int clock;
     bool running;
-    StopWatch chrono;
 
     version(time_tracing)
     {
-        long t[8];
-        long tGlobal[t.length-1] = 0;
+        long[8] t;
+        long[t.length-1] tGlobal = 0;
     }
 
 
@@ -136,8 +133,6 @@ final class Gbc
         joystick.connectCpu(cpu);
         serialPort.connectCpu(cpu);
 
-
-        chrono.start();
         running = true;
         clock = 0;
     }
@@ -209,42 +204,25 @@ final class Gbc
                 }
             }
 
-            // Every syncFrequency Hz
-            if(clock % (cpuFrequency / syncFrequency) == 0)
-            {
-                // Controls the speed of the emulation (slow down only if necessary)
-                long delay = 1_000_000L * clock / cpuFrequency - chrono.peek().usecs;
-
-                if(delay > 0)
-                    Thread.sleep(dur!"usecs"(delay));
-            }
-
             // Reset counters every seconds
             if(clock == cpuFrequency)
-            {
-                writefln("speed: %d%%", cast(int)((100000000000.0/chrono.peek.nsecs)+0.5));
-
-                chrono.stop();
                 clock = 0;
-                chrono.reset();
-                chrono.start();
-            }
         }
     }
 
     ~this()
     {
-        delete cartridgeData;
-        delete cpu;
-        delete gpu;
-        delete soundController;
-        delete mmu;
-        delete dividerTimer;
-        delete timaTimer;
-        delete renderer;
-        delete joystick;
-        delete serialPort;
-        delete cartridgeMmu;
+        cartridgeData.destroy();
+        cpu.destroy();
+        gpu.destroy();
+        soundController.destroy();
+        mmu.destroy();
+        dividerTimer.destroy();
+        timaTimer.destroy();
+        renderer.destroy();
+        joystick.destroy();
+        serialPort.destroy();
+        cartridgeMmu.destroy();
     }
 
     bool isRunning()

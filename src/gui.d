@@ -4,6 +4,8 @@ pragma(msg, "TODO: import useless");
 import std.stdio;
 import std.concurrency;
 import std.string;
+import std.datetime;
+import std.algorithm.comparison;
 import core.time;
 import core.thread;
 
@@ -35,12 +37,19 @@ final class Gui : MainWindow
 {
     private:
 
+    immutable uint drawFrequency = 120;
+    immutable uint coreFrequency = 500;
     RendererItf renderer = null;
     JoystickItf joystick = null;
     Timeout frameUpdate = null;
     DrawingArea renderArea;
     ImageSurface image = null;
     int scale;
+    Gbc gbc = null;
+    Timeout gbcTickUpdate = null;
+    CairoFilter interpolationMode = CairoFilter.NEAREST;
+    StopWatch chrono;
+    bool maxSpeed = false;
 
     // Warning: should have this scope to be tracked by the GC
     // (the GC don't see the use of the buffer inside the GTK calls)
@@ -49,7 +58,7 @@ final class Gui : MainWindow
 
     public:
 
-    this(string name, string appParams[])
+    this(string name, string[] appParams)
     {
         super(name);
         setBorderWidth(5);
@@ -66,15 +75,38 @@ final class Gui : MainWindow
         openRomItem.addOnActivate(s => openFile);
         fileMenu.append(openRomItem);
         auto closeRomItem = new MenuItem("_Close ROM");
-        closeRomItem.addOnActivate((s) {
-            connectRenderer(null);
-            connectJoystick(null);
-            locate("backend").send("close");
-        });
+        closeRomItem.addOnActivate(s => stopGbc);
         fileMenu.append(closeRomItem);
         auto quitItem = new MenuItem("_Quit");
         quitItem.addOnActivate(s => quit);
         fileMenu.append(quitItem);
+        auto viewMenu = menuBar.append("_View");
+        auto zoomMenuItem = viewMenu.appendSubmenu("Set _zoom");
+        auto zoomX1Item = new MenuItem("_100%");
+        zoomX1Item.addOnActivate(delegate(s) {scale = 1; connectRenderer(renderer);});
+        zoomMenuItem.append(zoomX1Item);
+        auto zoomX2Item = new MenuItem("_200%");
+        zoomX2Item.addOnActivate(delegate(s) {scale = 2; connectRenderer(renderer);});
+        zoomMenuItem.append(zoomX2Item);
+        auto zoomX3Item = new MenuItem("_300%");
+        zoomX3Item.addOnActivate(delegate(s) {scale = 3; connectRenderer(renderer);});
+        zoomMenuItem.append(zoomX3Item);
+        auto zoomX4Item = new MenuItem("_400%");
+        zoomX4Item.addOnActivate(delegate(s) {scale = 4; connectRenderer(renderer);});
+        zoomMenuItem.append(zoomX4Item);
+        auto zoomX6Item = new MenuItem("_600%");
+        zoomX6Item.addOnActivate(delegate(s) {scale = 6; connectRenderer(renderer);});
+        zoomMenuItem.append(zoomX6Item);
+        auto zoomX8Item = new MenuItem("_800%");
+        zoomX8Item.addOnActivate(delegate(s) {scale = 8; connectRenderer(renderer);});
+        zoomMenuItem.append(zoomX8Item);
+        auto interpolationMenuItem = viewMenu.appendSubmenu("Set _interpolation");
+        auto nearestInterpItem = new MenuItem("Nearest (fastest)");
+        nearestInterpItem.addOnActivate(delegate(s) {interpolationMode = CairoFilter.NEAREST; connectRenderer(renderer);});
+        interpolationMenuItem.append(nearestInterpItem);
+        auto bilinearInterpItem = new MenuItem("Bilinear (slower)");
+        bilinearInterpItem.addOnActivate(delegate(s) {interpolationMode = CairoFilter.BILINEAR; connectRenderer(renderer);});
+        interpolationMenuItem.append(bilinearInterpItem);
         box.packStart(menuBar, false, false, 0);
 
         renderArea = new DrawingArea();
@@ -88,28 +120,23 @@ final class Gui : MainWindow
         addOnDestroy(s => quit);
 
         if(appParams.length > 0)
-        {
-            pragma(msg, "TODO: to be implemented");
-        }
-
-        Tid backend = spawnLinked(&emuThread, cast(shared(Gui))this);
-        register("backend", backend);
+            startGbc(appParams[0]);
     }
 
-    this(string name, string appParams[], int width, int height)
+    this(string name, string[] appParams, int width, int height)
     {
         this(name, appParams);
         setDefaultSize(width, height);
     }
 
-    void connectRenderer(RendererItf renderer)
+    void connectRenderer(RendererItf newRenderer)
     {
-        this.renderer = renderer;
+        renderer = newRenderer;
 
         if(renderer)
         {
-            const int w = this.renderer.width();
-            const int h = this.renderer.height();
+            const int w = renderer.width();
+            const int h = renderer.height();
 
             renderArea.setSizeRequest(w*scale, h*scale);
 
@@ -118,79 +145,42 @@ final class Gui : MainWindow
             image = ImageSurface.createForData(imageData.ptr, CairoFormat.ARGB32, w, h, stride);
 
             if(frameUpdate is null)
-                frameUpdate = new Timeout(16u, &frameTimeout);
+            {
+                immutable uint drawDelay = max(1, 1000/drawFrequency);
+                frameUpdate = new Timeout(drawDelay, &frameTimeout);
+            }
         }
     }
 
-    void connectJoystick(JoystickItf joystick)
+    void connectJoystick(JoystickItf newJoystick)
     {
-        this.joystick = joystick;
+        joystick = newJoystick;
     }
 
 
     private:
 
-    static void emuThread(shared(Gui) gui)
+    void startGbc(string filename)
     {
-        try
-        {
-            bool quit = false;
+        gbc = new Gbc(filename);
+        connectRenderer(gbc.renderer);
+        connectJoystick(gbc.joystick);
 
-            while(!quit)
-            {
-                string filename;
+        chrono.reset();
+        chrono.start();
 
-                while(filename == "" && !quit)
-                {
-                    receive(
-                        (string command) {
-                            string[] commandElems = command.split("|");
-                            if(commandElems[0] == "load")
-                                filename = commandElems[1];
-                            else if(commandElems[0] == "quit")
-                                quit = true;
-                        },
-                    );
-                }
+        immutable uint coreDelay = max(1, 1000/coreFrequency);
+        gbcTickUpdate = new Timeout(coreDelay, &gbcTickTimeout);
+    }
 
-                if(quit)
-                    break;
+    void stopGbc()
+    {
+        gbc.destroy();
+        gbc = null;
+        renderer = null;
+        joystick = null;
 
-                bool end = false;
-                auto gbc = new Gbc(filename);
-
-                Gui localGui = cast(Gui)gui;
-                localGui.connectRenderer(gbc.renderer);
-                localGui.connectJoystick(gbc.joystick);
-
-                while(gbc.isRunning() && !end)
-                {
-                    for(int i=0 ; i<4096 ; ++i)
-                    {
-                        gbc.tick();
-                        if(!gbc.isRunning())
-                            break;
-                    }
-
-                    receiveTimeout(
-                        Duration.zero(),
-                        (string command) {
-                            string[] commandElems = command.split("|");
-                            if(commandElems[0] == "close")
-                                end = true;
-                            if(commandElems[0] == "quit")
-                                end = quit = true;
-                        }
-                    );
-                }
-
-                delete gbc;
-            }
-        }
-        catch(Throwable err)
-        {
-            writeln("Emulator thread critical failure: ", err);
-        }
+        chrono.stop();
     }
 
     void openFile()
@@ -201,9 +191,10 @@ final class Gui : MainWindow
         {
             string filename = dialog.getFilename();
 
-            Tid backendTid = locate("backend");
-            backendTid.send("close");
-            backendTid.send("load|" ~ filename);
+            if(gbc !is null)
+                stopGbc();
+
+            startGbc(filename);
         }
 
         dialog.close();
@@ -211,6 +202,9 @@ final class Gui : MainWindow
 
     bool update(Context ctx)
     {
+        ctx.setSourceRgb(0.0, 0.0, 0.0);
+        ctx.paint();
+
         if(this.renderer !is null)
         {
             const int w = this.renderer.width();
@@ -232,9 +226,11 @@ final class Gui : MainWindow
                 }
             }
 
+            const int gw = renderArea.getAllocatedWidth();
+            const int gh = renderArea.getAllocatedHeight();
             ctx.scale(scale, scale);
-            ctx.setSourceSurface(image, 0, 0);
-            ctx.getSource.setFilter(CairoFilter.NEAREST);
+            ctx.setSourceSurface(image, (gw/scale-w)/2, (gh/scale-h)/2);
+            ctx.getSource.setFilter(interpolationMode);
             ctx.paint();
         }
 
@@ -248,10 +244,33 @@ final class Gui : MainWindow
         return renderer !is null;
     }
 
+    bool gbcTickTimeout()
+    {
+        if(gbc is null)
+            return false;
+
+        // Controls the speed of the emulation
+        long maxClock = cast(uint)(chrono.peek().usecs * 1e-6 * gbc.cpuFrequency);
+
+        // Double speed mode
+        if(maxSpeed)
+            maxClock *= 2;
+
+        chrono.reset();
+
+        for(int clock=0 ; clock<maxClock ; ++clock)
+            gbc.tick();
+
+        bool running = gbc.isRunning();
+
+        if(!running)
+            stopGbc();
+
+        return running;
+    }
+
     void quit()
     {
-        locate("backend").send("quit");
-        receiveOnly!LinkTerminated();
         Main.quit();
     }
 
@@ -268,7 +287,8 @@ final class Gui : MainWindow
                 case GdkKeysyms.GDK_w: case GdkKeysyms.GDK_W: joystick.setA(true); return true;
                 case GdkKeysyms.GDK_x: case GdkKeysyms.GDK_X: joystick.setB(true); return true;
                 case GdkKeysyms.GDK_Return: joystick.setStart(true); return true;
-                case GdkKeysyms.GDK_space: joystick.setSelect(true); return true;
+                case GdkKeysyms.GDK_BackSpace: joystick.setSelect(true); return true;
+                case GdkKeysyms.GDK_space: maxSpeed = true; return true;
 
                 default:
                     break;
@@ -291,7 +311,8 @@ final class Gui : MainWindow
                 case GdkKeysyms.GDK_w: case GdkKeysyms.GDK_W: joystick.setA(false); return true;
                 case GdkKeysyms.GDK_x: case GdkKeysyms.GDK_X: joystick.setB(false); return true;
                 case GdkKeysyms.GDK_Return: joystick.setStart(false); return true;
-                case GdkKeysyms.GDK_space: joystick.setSelect(false); return true;
+                case GdkKeysyms.GDK_BackSpace: joystick.setSelect(false); return true;
+                case GdkKeysyms.GDK_space: maxSpeed = false; return true;
 
                 default:
                     break;
