@@ -1,0 +1,6 @@
+infos/
+lib/derelict
+lib/GtkD
+roms/games
+*.o
+bin/gba
