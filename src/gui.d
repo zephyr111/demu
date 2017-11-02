@@ -37,8 +37,9 @@ final class Gui : MainWindow
 {
     private:
 
-    immutable uint drawFrequency = 120;
-    immutable uint coreFrequency = 500;
+    static immutable uint drawFrequency = 120;
+    static immutable uint coreFrequency = 200;
+    static immutable uint emuStepCount = 16;
     RendererItf renderer = null;
     JoystickItf joystick = null;
     Timeout frameUpdate = null;
@@ -50,6 +51,12 @@ final class Gui : MainWindow
     CairoFilter interpolationMode = CairoFilter.NEAREST;
     StopWatch chrono;
     bool maxSpeed = false;
+
+    // Probing variables to evaluate the emulation speed
+    uint callCount = 0;
+    uint clockSum = 0;
+    StopWatch probeChrono;
+    float emulationSpeed = 1.0;
 
     // Warning: should have this scope to be tracked by the GC
     // (the GC don't see the use of the buffer inside the GTK calls)
@@ -147,7 +154,7 @@ final class Gui : MainWindow
             if(frameUpdate is null)
             {
                 immutable uint drawDelay = max(1, 1000/drawFrequency);
-                frameUpdate = new Timeout(drawDelay, &frameTimeout);
+                frameUpdate = new Timeout(drawDelay, &frameTimeout, GPriority.LOW);
             }
         }
     }
@@ -168,9 +175,11 @@ final class Gui : MainWindow
 
         chrono.reset();
         chrono.start();
+        probeChrono.reset();
+        probeChrono.start();
 
         immutable uint coreDelay = max(1, 1000/coreFrequency);
-        gbcTickUpdate = new Timeout(coreDelay, &gbcTickTimeout);
+        gbcTickUpdate = new Timeout(coreDelay, &gbcTickTimeout, GPriority.LOW);
     }
 
     void stopGbc()
@@ -181,6 +190,7 @@ final class Gui : MainWindow
         joystick = null;
 
         chrono.stop();
+        probeChrono.stop();
     }
 
     void openFile()
@@ -250,18 +260,47 @@ final class Gui : MainWindow
             return false;
 
         // Controls the speed of the emulation
-        long maxClock = cast(uint)(chrono.peek().usecs * 1e-6 * gbc.cpuFrequency);
+        // Prevent the computation of the emulation to be too slow (no more than x5 the default time)
+        const uint elapsedTime = min(cast(uint)chrono.peek().usecs, 5*1_000_000/coreFrequency);
+        uint maxClock = cast(uint)(elapsedTime * 1e-6 * gbc.cpuFrequency);
 
-        // Double speed mode
-        if(maxSpeed)
-            maxClock *= 2;
+        emulationSpeed = (clockSum*1.0/gbc.cpuFrequency) / (probeChrono.peek().usecs*1e-6);
 
         chrono.reset();
 
-        for(int clock=0 ; clock<maxClock ; ++clock)
-            gbc.tick();
+        writefln("Speed: %.0f%%", emulationSpeed*100);
 
-        bool running = gbc.isRunning();
+        if(callCount >= coreFrequency)
+        {
+            clockSum = 0;
+            callCount = 0;
+            probeChrono.stop();
+            probeChrono.reset();
+            probeChrono.start();
+        }
+        else
+        {
+            callCount++;
+        }
+
+        if(maxSpeed)
+            maxClock *= emuStepCount;
+
+        for(int it=0 ; it<emuStepCount ; ++it)
+        {
+            const uint localMaxClock = min((maxClock/emuStepCount)*(it+1), maxClock) - (maxClock/emuStepCount)*it;
+
+            for(int clock=0 ; clock<localMaxClock ; ++clock)
+                gbc.tick();
+
+            clockSum += localMaxClock;
+
+            // Cut the émulation if its too slow
+            if(chrono.peek().usecs > 1_000_000 / coreFrequency)
+                break;
+        }
+
+        const bool running = gbc.isRunning();
 
         if(!running)
             stopGbc();
@@ -271,6 +310,7 @@ final class Gui : MainWindow
 
     void quit()
     {
+        gbc.destroy();
         Main.quit();
     }
 
