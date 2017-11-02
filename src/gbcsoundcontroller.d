@@ -32,8 +32,8 @@ final class GbcSoundController : Mmu8bItf
     }
 
     immutable bool useCgb;
-    immutable uint cpuFrequency = 4_194_304;
-    ubyte channel1_sweep = 0x80;
+    static immutable uint cpuFrequency = 4_194_304;
+    ubyte channel1_sweep = 0x00;
     ubyte channel1_soundLength = 0xBF;
     ubyte channel1_volumeEnvelope = 0xF3;
     ubyte channel1_frequencyLo = 0x00; // Init value undefined
@@ -57,13 +57,13 @@ final class GbcSoundController : Mmu8bItf
     ubyte soundEnabled = 0xF0; // 0xF1 for GB, 0xF0 for SGB
     float[32768] randomValues;
     uint internalClock = 0;
-    immutable uint clockStep = 16; // Must be a power of two (1=useless, 2=perfect/very-slow, 4..16=good/slow, 32..64=medium/fast, 128+=bad/very-fast)
-    immutable uint maxInternalClock = 4_194_304; // Must divisible by all the frequency used in this module
-    immutable uint bufferCount = 8; // 2: double buffering (minimum & synchronized), 3: triple buffering (medium)... But higher values increase latency
-    immutable uint soundFrequency = cpuFrequency / clockStep; // Generally: perfect=65536, good=48000, medium=32768, bad=16384
-    immutable uint soundBufferSize = 65536 / clockStep * 2; // final buffer size (stereo sound), small values cause performance issues, high values cause a high latency
+    static immutable uint clockStep = 32; // Must be a power of two (1=useless, 2=perfect/very-slow, 4..16=good/slow, 32..64=medium/fast, 128+=bad/very-fast)
+    static immutable uint maxInternalClock = 4_194_304; // Must divisible by all the frequency used in this module
+    static immutable uint bufferCount = 8; // 2: double buffering (minimum & synchronized), 3: triple buffering (medium)... But higher values increase latency
+    static immutable uint soundFrequency = cpuFrequency / clockStep; // Generally: perfect=65536, good=48000, medium=32768, bad=16384
+    static immutable uint soundBufferSize = 65536 / clockStep * 2; // final buffer size (stereo sound), small values cause performance issues, high values cause a high latency
     uint bufferCur = 0;
-    uint[4] channelCur = 0;
+    float[4] channelCur = 0;
     ALCdevice* device;
     ALCcontext* context;
     uint alSource;
@@ -176,7 +176,7 @@ final class GbcSoundController : Mmu8bItf
 
     void resetRegisters()
     {
-        channel1_sweep = 0x80;
+        channel1_sweep = 0x00;
         channel1_soundLength = 0x3F;
         pragma(msg, "TODO: Check the value of the channel1_volumeEnvelope: test n°1 say 0x00, GCB manual say nothing (default: 0xF3)");
         channel1_volumeEnvelope = 0x00;
@@ -214,7 +214,7 @@ final class GbcSoundController : Mmu8bItf
         {
             // Channel 1 Sweep register
             case 0xFF10:
-                return channel1_sweep;
+                return channel1_sweep | 0b10000000;
 
             // Channel 1 Sound length/Wave pattern duty
             case 0xFF11:
@@ -326,7 +326,7 @@ final class GbcSoundController : Mmu8bItf
             // Channel 1 Sweep register
             case 0xFF10:
                 if((soundEnabled & 0b10000000) != 0)
-                    channel1_sweep = value | 0b10000000;
+                    channel1_sweep = (channel1_sweep & 0b10000000) | (value & 0b01111111);
                 break;
 
             // Channel 1 Sound length/Wave pattern duty
@@ -369,6 +369,52 @@ final class GbcSoundController : Mmu8bItf
                             if((channel1_frequencyHi & 0b01000000) == 0)
                                 channel1_soundLength &= 0b11000000;
                         }
+
+///////////////////////////////////////////////////////////////////////////////
+                        const float sweepTime = (channel1_sweep & 0b01110000) >> 4;
+                        const bool sweepIncreased = (channel1_sweep & 0b0001000) == 0;
+                        const uint sweepShiftCount = channel1_sweep & 0b0000111;
+
+                        pragma(msg, "TODO: To check - Highly experimental !");
+                        if(sweepShiftCount > 0)
+                        {
+                            const uint tmpFrequency = ((channel1_frequencyHi & 0b00000111) << 8) | channel1_frequencyLo;
+
+                            if(sweepIncreased)
+                            {
+                                const uint newFrequencyRegister = tmpFrequency + (tmpFrequency >> sweepShiftCount);
+
+                                if(newFrequencyRegister <= 2047)
+                                {
+                                    channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
+                                    channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+                                }
+                                else
+                                {
+                                    soundEnabled &= 0b11111110;
+                                }
+                            }
+                            else
+                            {
+                                const uint newFrequencyRegister = tmpFrequency - (tmpFrequency >> sweepShiftCount);
+
+                                if(newFrequencyRegister >= 0)
+                                {
+                                    channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
+                                    channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+                                }
+                                else
+                                {
+                                    soundEnabled &= 0b11111110;
+                                }
+                            }
+                        }
+
+                        if(sweepShiftCount > 0 || sweepTime > 0)
+                            channel1_sweep |= 0b10000000;
+                        else
+                            channel1_sweep &= 0b01111111;
+///////////////////////////////////////////////////////////////////////////////
                     }
                 }
                 break;
@@ -565,11 +611,6 @@ final class GbcSoundController : Mmu8bItf
 
         if((soundEnabled & 0b00000001) != 0)
         {
-            // Sound sweep
-            const float sweepTime = (channel1_sweep & 0b01110000) >> 4;
-            const bool sweepIncreased = (channel1_sweep & 0b0001000) == 0;
-            const uint sweepShiftCount = channel1_sweep & 0b0000111;
-
             // Sound length & sound wave pattern
             static float[][] wavePatterns = [
                                                 [-1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f, +1.0f], 
@@ -594,16 +635,17 @@ final class GbcSoundController : Mmu8bItf
             const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b00010000) >> 4)) / 7.0f;
             const float globalVolume = (so1Volume + so2Volume) / 2.0f;
 
-            if(realFrequency <= soundFrequency)
+            if(frequency*2 <= soundFrequency)
             {
                 const float volume = initialVolume / 15.0f;
-                const uint cur = (channelCur[0] / (soundFrequency / realFrequency)) % 8;
-                soundValue = wavePattern[cur] * volume * globalVolume;
-                channelCur[0]++;
+                const uint cur = cast(uint)channelCur[0];
+                soundValue = wavePattern[cur%8] * volume * globalVolume;
+                //const float weight = fmod(channelCur[0], 1.0f);
+                //soundValue = (wavePattern[cur%8] * (1.0f-weight) + wavePattern[(cur+1)%8] * weight) * volume * globalVolume;
+                channelCur[0] += cast(float)realFrequency / soundFrequency;
 
-                pragma(msg, "TODO: To check - enable even with disabled sound ?");
-                if(channelCur[0] == 8 * (soundFrequency / realFrequency))
-                    channelCur[0] = 0;
+                if(channelCur[0] >= 256.0f)
+                    channelCur[0] = fmod(channelCur[0], 256.0f);
             }
             else
             {
@@ -625,36 +667,49 @@ final class GbcSoundController : Mmu8bItf
             }
 
             pragma(msg, "TODO: Check if the frequency sweeping work fine");
-            if(sweepTime != 0 && internalClock % (cpuFrequency / 128) == 0)
+            if(internalClock % (cpuFrequency / 128) == 0)
             {
-                pragma(msg, "TODO: To check - Possible bug with the modulo since sweepShiftCount is not a power of two and internalClock is reset every 2**22");
-                if((internalClock / (cpuFrequency / 128)) % sweepTime == 0)
-                {
-                    if(sweepIncreased)
-                    {
-                        const uint newFrequency = frequency + (frequency >> sweepShiftCount);
+                // Sound sweep
+                const float sweepTime = (channel1_sweep & 0b01110000) >> 4;
+                const bool sweepIncreased = (channel1_sweep & 0b0001000) == 0;
+                const uint sweepShiftCount = channel1_sweep & 0b0000111;
 
-                        if(newFrequency <= 131072)
+                if(sweepTime > 0 && (channel1_sweep & 0b10000000) != 0)
+                {
+                    //const float realSweepTime = (sweepTime > 0) ? sweepTime : 8;
+
+                    pragma(msg, "TODO: To check - Possible bug with the modulo since sweepShiftCount is not a power of two and internalClock is reset every 2**22");
+                    if((internalClock / (cpuFrequency / 128)) % sweepTime == 0)
+                    {
+                        if(sweepIncreased)
                         {
-                            const uint newFrequencyRegister = max(2048 - 131072 / newFrequency - 1, 0);
-                            channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
-                            channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+                            const uint newFrequencyRegister = tmpFrequency + (tmpFrequency >> sweepShiftCount);
+
+                            if(newFrequencyRegister <= 2047)
+                            {
+                                channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
+                                channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+                            }
+                            else
+                            {
+                                pragma(msg, "TODO: To check - disable other registers ?");
+                                soundEnabled &= 0b11111110;
+                            }
                         }
                         else
                         {
-                            pragma(msg, "TODO: To check - disable other registers ?");
-                            soundEnabled &= 0b11111110;
-                        }
-                    }
-                    else
-                    {
-                        const uint newFrequency = frequency - (frequency >> sweepShiftCount);
+                            const uint newFrequencyRegister = tmpFrequency - (tmpFrequency >> sweepShiftCount);
 
-                        if(newFrequency >= 64)
-                        {
-                            const uint newFrequencyRegister = min(2048 - 131072 / newFrequency + 1, 2047);
-                            channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
-                            channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+                            if(newFrequencyRegister >= 0)
+                            {
+                                channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
+                                channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+                            }
+                            else
+                            {
+                                pragma(msg, "TODO: To check - disable other registers ?");
+                                soundEnabled &= 0b11111110;
+                            }
                         }
                     }
                 }
@@ -706,16 +761,17 @@ final class GbcSoundController : Mmu8bItf
             const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b00100000) >> 5)) / 7.0f;
             const float globalVolume = (so1Volume + so2Volume) / 2.0f;
 
-            if(realFrequency <= soundFrequency)
+            if(frequency*2 <= soundFrequency)
             {
                 const float volume = initialVolume / 15.0f;
-                const uint cur = (channelCur[1] / (soundFrequency / realFrequency)) % 8;
-                soundValue = wavePattern[cur] * volume * globalVolume;
-                channelCur[1]++;
+                const uint cur = cast(uint)channelCur[1];
+                soundValue = wavePattern[cur%8] * volume * globalVolume;
+                //const float weight = fmod(channelCur[1], 1.0f);
+                //soundValue = (wavePattern[cur%8] * (1.0f-weight) + wavePattern[(cur+1)%8] * weight) * volume * globalVolume;
+                channelCur[1] += cast(float)realFrequency / soundFrequency;
 
-                pragma(msg, "TODO: To check - enable even with disabled sound ?");
-                if(channelCur[1] == 8 * (soundFrequency / realFrequency))
-                    channelCur[1] = 0;
+                if(channelCur[1] >= 256.0f)
+                    channelCur[1] = fmod(channelCur[1], 256.0f);
             }
             else
             {
@@ -772,12 +828,12 @@ final class GbcSoundController : Mmu8bItf
             const float so2Volume = ((channelControl & 0b00000111) * ((soundOutput & 0b01000000) >> 6)) / 7.0f;
             const float globalVolume = (so1Volume + so2Volume) / 2.0f;
 
-            if(realFrequency <= soundFrequency)
+            if(frequency*16 <= soundFrequency)
             {
-                const uint cur = (channelCur[2] / (soundFrequency / realFrequency)) % 32;
+                const uint cur = cast(uint)channelCur[2] % 32;
                 const ubyte userValue = (channel3_wavePatternRam[(cur/2)%16] >> (4-(cur%2)*4)) & 0b00001111;
                 soundValue = (userValue / 7.5f - 1.0f) * volume * globalVolume;
-                channelCur[2]++;
+                channelCur[2] += cast(float)realFrequency / soundFrequency;
             }
             else
             {
@@ -785,9 +841,8 @@ final class GbcSoundController : Mmu8bItf
                     writeln("WARNING: sound not played on channel 3 (frequency to high)");
             }
 
-            pragma(msg, "TODO: To check - enable even with disabled sound ?");
-            if(channelCur[2] == 32 * (soundFrequency / realFrequency))
-                channelCur[2] = 0;
+            if(channelCur[2] >= 256.0f)
+                channelCur[2] = fmod(channelCur[2], 256.0f);
         }
 
         if(!loop && internalClock % 16384 == 8192)
@@ -820,7 +875,7 @@ final class GbcSoundController : Mmu8bItf
             const uint freqShift = min((channel4_polynomialCounter >> 4) + 1, 14);
             const uint counterBits = (channel4_polynomialCounter & 0b00001000) == 0 ? 15 : 7;
             const uint counterMask = (1 << counterBits) - 1;
-            const float freqDivider = fmax(channel4_polynomialCounter & 0b00000111, 0.5f);
+            const float freqDivider = max(cast(float)(channel4_polynomialCounter & 0b00000111), 0.5f);
             const uint frequency = cast(uint)(524288.0f / freqDivider) >> freqShift;
 
             // Stereo loud speakers
@@ -833,14 +888,13 @@ final class GbcSoundController : Mmu8bItf
                     writeln("WARNING: sound with to high frequency (channel 4)");
 
             const float volume = initialVolume / 15.0f;
-            const uint cur = channelCur[3] / (soundFrequency / min(frequency, soundFrequency));
-
-            soundValue = randomValues[cur & counterMask] * volume * globalVolume;
-            channelCur[3]++;
+            const uint cur = cast(uint)channelCur[3] & counterMask;
+            soundValue = randomValues[cur] * volume * globalVolume;
+            channelCur[3] += cast(float)min(frequency, soundFrequency) / soundFrequency;
 
             pragma(msg, "TODO: To check - enable even with disabled sound ?");
-            if(cur == counterMask)
-                channelCur[3] = 0;
+            if(channelCur[3] >= counterMask)
+                channelCur[3] = fmod(channelCur[3], counterMask);
 
             if(sweepCount != 0 && internalClock % (cpuFrequency / 64) == 0)
             {
@@ -870,14 +924,23 @@ final class GbcSoundController : Mmu8bItf
         return SoundValue(soundValue, soundValue);
     }
 
-    SoundValue mixSound(in SoundValue[] values)
+    SoundValue mixSound(int n)(in SoundValue[n] values)
     {
-        return SoundValue(values.map!"a.left".sum / values.length, values.map!"a.right".sum / values.length);
+        float left = 0.0f;
+        float right = 0.0f;
+
+        foreach(const SoundValue v ; values)
+        {
+            left += v.left;
+            right += v.right;
+        }
+
+        return SoundValue(left / n, right / n);
     }
 
     SoundValue normalize(in SoundValue value)
     {
-        return SoundValue(fmin(fmax(value.left, -1.0f), 1.0f), fmin(fmax(value.right, -1.0f), 1.0f));
+        return SoundValue(min(max(value.left, -1.0f), 1.0f), min(max(value.right, -1.0f), 1.0f));
     }
 
     void tick()
@@ -899,10 +962,10 @@ final class GbcSoundController : Mmu8bItf
                 const SoundValue soundValueChan4 = tickChannel4();
 
                 const float soundAmplitude = cast(float)(max(-short.min/2, short.max/2) - 1);
-                //const SoundValue soundValue = normalize(mixSound([soundValueChan1])); // see other sound
-                const SoundValue soundValue = normalize(mixSound([soundValueChan1, soundValueChan2, soundValueChan3, soundValueChan4])); // see other sound
+                const SoundValue soundValue = normalize(mixSound([soundValueChan1, soundValueChan2, soundValueChan3, soundValueChan4]));
                 bufferLeftSoundValue = cast(short)(soundValue.left * soundAmplitude);
                 bufferRightSoundValue = cast(short)(soundValue.right * soundAmplitude);
+
             }
 
             const uint buffId = (bufferCur / soundBufferSize) % bufferCount;
@@ -919,8 +982,6 @@ final class GbcSoundController : Mmu8bItf
                 int queuedBufferCount;
                 alGetSourceiv(alSource, AL_BUFFERS_QUEUED, &queuedBufferCount);
 
-                writefln("DEBUG: queuedBufferCount=%d, processedBufferCount=%d", queuedBufferCount, processedBufferCount);
-
                 if(processedBufferCount > 0)
                 {
                     while(processedBufferCount > 0)
@@ -933,9 +994,9 @@ final class GbcSoundController : Mmu8bItf
                 }
                 else if(queuedBufferCount == bufferCount)
                 {
+                    writeln("Warning: sound buffer queuing too fast for the played source, buffers are replaced in the sound buffer queue");
                     alSourceStop(alSource);
                     checkErrors("Unable to stop an OpenAL source");
-                    writeln("DEBUG: SOUND STREAMING TOO SLOW => BUFFER REPLACEMENT");
                     alSourceUnqueueBuffers(alSource, 1, &alBuffers[buffId]);
                     checkErrors("Unable to unqueue a sound buffer to an OpenAL source");
                     alSourcePlay(alSource);

@@ -251,7 +251,7 @@ final class GbcGpu : Mmu8bItf
                         if(lcdVblankIntFlag)
                             statInt();
 
-                        //vSyncInt();
+                        vSyncInt();
                         pragma(msg, "TODO: vsync here ? (yes, but check before on Zelda with double speed mode)");
                     }
                     else
@@ -273,7 +273,7 @@ final class GbcGpu : Mmu8bItf
                             statInt();
 
                         curLine = 0;
-                        vSyncInt();
+                        //vSyncInt();
                         pragma(msg, "TODO: vsync here ? (no)");
                     }
                 }
@@ -326,6 +326,7 @@ final class GbcGpu : Mmu8bItf
     Color sgbBgColor(uint tilePixel) const
     {
         const ubyte gray = sgbPalette[(sgbBgPaletteData >> (tilePixel*2)) & 0x03];
+        //const ubyte gray = cast(ubyte)(0x55 * (3 - ((sgbBgPaletteData >> (tilePixel*2)) & 0x03)));
         return Color(gray, gray, gray);
     }
 
@@ -371,13 +372,12 @@ final class GbcGpu : Mmu8bItf
         const ubyte tileIdMask = (bgAndWindowTileBaseFlag == 0) ? 0x80 : 0x00;
 
         const uint yMap = ((y + scrollY) % 256) / 8;
-        const uint yTile = ((y + scrollY) % 256) % 8;
+        const uint yTile = (y + scrollY) % 8;
+        Color[160] scanLine;
 
-        foreach(uint x ; 0..160)
+        foreach(uint xBlock ; scrollX/8..scrollX/8+21)
         {
-            const uint xMap = ((x + scrollX) % 256) / 8;
-            const uint xTile = ((x + scrollX) % 256) % 8;
-
+            const uint xMap = xBlock % 32;
             const ubyte tileId = tileMap[yMap * 32 + xMap] ^ tileIdMask;
 
             if(useCgb)
@@ -390,29 +390,52 @@ final class GbcGpu : Mmu8bItf
                 const bool isFront = (cgbTileAttr & 0b10000000) != 0;
                 pragma(msg, "TODO: isFront not implemented");
                 const(ubyte)[] tile = (cgbTileBank == 0) ? tileSet[tileId*16..tileId*16+16] : cgbTileSet[tileId*16..tileId*16+16];
-
-                const uint xTileFinal = (xFlip) ? 7-xTile : xTile;
                 const uint yTileFinal = (yFlip) ? 7-yTile : yTile;
-                const uint bitPos = 7 - xTileFinal;
-                const uint mask = 1 << bitPos;
                 const(ubyte)[] tileLine = tile[yTileFinal*2..yTileFinal*2+2];
-                const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
-                const Color color = cgbBgColor(cgbPaletteId, pixel);
-                tmpRawLine[x] = pixel;
-                renderer.setPixel(x, y, color);
+
+                foreach(uint xTile ; 0..8)
+                {
+                    const int x = xBlock * 8 - scrollX + xTile;
+
+                    if(x >= 0 && x < 160)
+                    {
+                        const uint xTileFinal = (xFlip) ? 7-xTile : xTile;
+                        const uint bitPos = 7 - xTileFinal;
+                        const uint mask = 1 << bitPos;
+                        const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
+                        const Color color = cgbBgColor(cgbPaletteId, pixel);
+
+                        tmpRawLine[x] = pixel;
+                        scanLine[x] = color;
+                        //renderer.setPixel(x, y, color);
+                    }
+                }
             }
             else
             {
                 const(ubyte)[] tile = tileSet[tileId*16..tileId*16+16];
-                const uint bitPos = 7 - xTile;
-                const uint mask = 1 << bitPos;
                 const(ubyte)[] tileLine = tile[yTile*2..yTile*2+2];
-                const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
-                const Color color = sgbBgColor(pixel);
-                tmpRawLine[x] = pixel;
-                renderer.setPixel(x, y, color);
+
+                foreach(uint xTile ; 0..8)
+                {
+                    const int x = xBlock * 8 - scrollX + xTile;
+
+                    if(x >= 0 && x < 160)
+                    {
+                        const uint bitPos = 7 - xTile;
+                        const uint mask = 1 << bitPos;
+                        const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
+                        const Color color = sgbBgColor(pixel);
+
+                        tmpRawLine[x] = pixel;
+                        scanLine[x] = color;
+                        //renderer.setPixel(x, y, color);
+                    }
+                }
             }
         }
+
+        renderer.setScanLine(y, scanLine);
     }
 
     // Not synchronized with the LCD screen
@@ -432,12 +455,10 @@ final class GbcGpu : Mmu8bItf
 
             const uint yMap = (y - windowY) / 8;
             const uint yTile = (y - windowY) % 8;
+            Color[160] scanLine;
 
-            foreach(uint x ; max(windowX-7,0)..160)
+            foreach(uint xMap ; max(windowX-7,0)/8..20)
             {
-                const uint xMap = (x - (windowX-7)) / 8;
-                const uint xTile = (x - (windowX-7)) % 8;
-
                 const ubyte tileId = tileMap[yMap * 32 + xMap] ^ tileIdMask;
 
                 if(useCgb)
@@ -450,29 +471,52 @@ final class GbcGpu : Mmu8bItf
                     const bool isFront = (cgbTileAttr & 0b10000000) != 0;
                     pragma(msg, "TODO: isFront not implemented");
                     const(ubyte)[] tile = (cgbTileBank == 0) ? tileSet[tileId*16..tileId*16+16] : cgbTileSet[tileId*16..tileId*16+16];
-
-                    const uint xTileFinal = (xFlip) ? 7-xTile : xTile;
                     const uint yTileFinal = (yFlip) ? 7-yTile : yTile;
-                    const uint bitPos = 7 - xTileFinal;
-                    const uint mask = 1 << bitPos;
                     const(ubyte)[] tileLine = tile[yTileFinal*2..yTileFinal*2+2];
-                    const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
-                    const Color color = cgbBgColor(cgbPaletteId, pixel);
-                    tmpRawLine[x] = pixel;
-                    renderer.setPixel(x, y, color);
+
+                    foreach(uint xTile ; 0..8)
+                    {
+                        const int x = xMap * 8 - (windowX-7) + xTile;
+
+                        if(x >= 0)
+                        {
+                            const uint xTileFinal = (xFlip) ? 7-xTile : xTile;
+                            const uint bitPos = 7 - xTileFinal;
+                            const uint mask = 1 << bitPos;
+                            const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
+                            const Color color = cgbBgColor(cgbPaletteId, pixel);
+
+                            tmpRawLine[x] = pixel;
+                            scanLine[x] = color;
+                            //renderer.setPixel(x, y, color);
+                        }
+                    }
                 }
                 else
                 {
                     const(ubyte)[] tile = tileSet[tileId*16..tileId*16+16];
-                    const uint bitPos = 7 - xTile;
-                    const uint mask = 1 << bitPos;
                     const(ubyte)[] tileLine = tile[yTile*2..yTile*2+2];
-                    const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
-                    const Color color = sgbBgColor(pixel);
-                    tmpRawLine[x] = pixel;
-                    renderer.setPixel(x, y, color);
+
+                    foreach(uint xTile ; 0..8)
+                    {
+                        const int x = xMap * 8 - (windowX-7) + xTile;
+
+                        if(x >= 0)
+                        {
+                            const uint bitPos = 7 - xTile;
+                            const uint mask = 1 << bitPos;
+                            const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
+                            const Color color = sgbBgColor(pixel);
+
+                            tmpRawLine[x] = pixel;
+                            scanLine[x] = color;
+                            //renderer.setPixel(x, y, color);
+                        }
+                    }
                 }
             }
+
+            renderer.setScanLine(y, scanLine);
         }
     }
 
@@ -487,7 +531,7 @@ final class GbcGpu : Mmu8bItf
         else
             spriteIds = iota(40).array.sort!((a, b) => spriteAttributeTable[a*4+1] < spriteAttributeTable[b*4+1]).array;
 
-        foreach(int i ; spriteIds)
+        foreach_reverse(int i ; spriteIds)
         {
             const uint yPos = spriteAttributeTable[i*4];
             const uint xPos = spriteAttributeTable[i*4 + 1];

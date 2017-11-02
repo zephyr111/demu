@@ -74,9 +74,9 @@ final class GbcSerialPort : Mmu8bItf
     {
         if(startTransferFlag)
         {
-            internalClock++;
+            internalClock += ((cpu.doubleSpeedState() & 0b10000000) != 0) ? 2 : 1;
 
-            if(!fastClockFlag && internalClock == 512 || fastClockFlag && internalClock == 16)
+            if(internalClock >= 16 && fastClockFlag || internalClock >= 512 && !fastClockFlag)
             {
                 internalClock = 0;
 

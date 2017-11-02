@@ -3,7 +3,7 @@ BIN_DIR = bin
 TARGET = gba
 
 DC=ldc2
-OPT=-O -release #-O2 -s -frelease
+OPT=-O -release -mcpu=native #-O2 -s -frelease
 SRCS = $(wildcard $(SRC_DIR)/*.d $(SRC_DIR)/interfaces/*.d)
 OBJS = $(SRCS:%.d=%.o)
 EXE_PATH = ./$(BIN_DIR)/$(TARGET)

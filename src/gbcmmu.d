@@ -85,6 +85,7 @@ final class GbcMmu : Mmu16bItf
 
                     // IO Ports
                     case 0xFF00: .. case 0xFF7F:
+                        //writefln("DEBUG: WRITE TO %0.4X WITH VALUE %0.2X", address, value);
                         switch(address)
                         {
                             case 0xFF00:
@@ -134,8 +135,9 @@ final class GbcMmu : Mmu16bItf
                                 break;
 
                             case 0xFF4D:
-                                pragma(msg, "TODO: support double speed mode");
-                                writeln("WARNING: the game want to use the double speed mode (not yet supported)");
+                                pragma(msg, "TODO: fully support double speed mode");
+                                writeln("WARNING: the game want to use the double speed mode (not fully supported)");
+                                cpu.doubleSpeedRequest(value);
                                 break;
 
                             case 0xFF51:
@@ -184,10 +186,6 @@ final class GbcMmu : Mmu16bItf
                                 pragma(msg, "Writting on infrared IO Ports is ignored");
                                 writeln("WARNING: Infrared used (unimplemented feature)");
                                 break;
-
-                            //case 0xFF40: .. case 0xFF6F:
-                            //    pragma(msg, "TODO !!!")
-                            //    break;
 
                             case 0xFF70:
                                 if(useCgb)
@@ -277,6 +275,7 @@ final class GbcMmu : Mmu16bItf
 
                     // IO Ports
                     case 0xFF00: .. case 0xFF7F:
+                        //writefln("DEBUG: READ TO %0.4X", address);
                         switch(address)
                         {
                             case 0xFF00:
@@ -310,8 +309,7 @@ final class GbcMmu : Mmu16bItf
                                 return gpuMmu.loadByte(address);
 
                             case 0xFF4D:
-                                pragma(msg, "TODO: support double speed mode");
-                                return 0x00;
+                                return cpu.doubleSpeedState();
 
                             pragma(msg, "TODO: check if DMA infos can be read");
                             case 0xFF51:

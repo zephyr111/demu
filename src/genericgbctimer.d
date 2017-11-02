@@ -73,9 +73,9 @@ class GenericGbcTimer
         return started;
     }
 
-    void tick()
+    bool tick()
     {
-        const cpuFrequency = 4194304;
+        static immutable uint cpuFrequency = 4_194_304;
 
         if(started)
         {
@@ -83,14 +83,21 @@ class GenericGbcTimer
 
             if(internalClock*freq >= cpuFrequency)
             {
-                if(value == 0xFF)
-                    value = resetVal;
-                else
-                    value++;
-
                 internalClock = 0;
+
+                if(value == 0xFF)
+                {
+                    value = resetVal;
+                    return true;
+                }
+                else
+                {
+                    value++;
+                }
             }
         }
+
+        return false;
     }
 };
 

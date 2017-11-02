@@ -1,5 +1,6 @@
 module gbccpu;
 
+import core.bitop;
 import std.stdio;
 import std.string;
 import std.algorithm;
@@ -23,10 +24,12 @@ import reference;
 
 pragma(msg, "TODO: support the halt bug");
 pragma(msg, "TODO: support completely the stop instruction");
+pragma(msg, "TODO: fully support the double speed mode (classic DMA should be two time faster, DMA to implement inside the CPU ?");
 final class GbcCpu : CpuItf
 {
     private:
 
+    static immutable bool tracing = false;
     immutable bool useCgb;
     Mmu16bItf mmu;
     Register af;
@@ -41,6 +44,7 @@ final class GbcCpu : CpuItf
     bool halted;
     bool stopped;
     int remainingClock = 0; // Number of CPU cycle needed to execute the next instruction
+    ubyte doubleSpeedMode;
 
 
     public:
@@ -48,11 +52,8 @@ final class GbcCpu : CpuItf
     this(bool cgbMode)
     {
         useCgb = cgbMode;
-    }
 
-    void init()
-    {
-        af.all = (useCgb) ? 0x11B0 : 0x01B0;
+        af.all = (cgbMode) ? 0x11B0 : 0x01B0;
         bc.all = 0x0013;
         de.all = 0x00D8;
         hl.all = 0x014D;
@@ -65,9 +66,34 @@ final class GbcCpu : CpuItf
 
         halted = false;
         stopped = false;
+        doubleSpeedMode = 0x00;
+    }
+
+    ubyte doubleSpeedState()
+    {
+        return doubleSpeedMode;
+    }
+
+    void doubleSpeedRequest(ubyte value)
+    {
+        doubleSpeedSwitchFlagSetting((value & 0b00000001) != 0);
     }
 
     bool tick()
+    {
+        if(doubleSpeedFlag)
+        {
+            const bool resSubIter1 = internalTick();
+            const bool resSubIter2 = internalTick();
+            return resSubIter1 || resSubIter2;
+        }
+        else
+        {
+            return internalTick();
+        }
+    }
+
+    bool internalTick()
     {
         // Check if an instruction is running
         if(remainingClock > 0)
@@ -79,6 +105,17 @@ final class GbcCpu : CpuItf
         // Deals with interrupts (if occured)
         if(stopped)
         {
+            if(doubleSpeedSwitchFlag)
+            {
+                doubleSpeedFlagSetting(!doubleSpeedFlag);
+                doubleSpeedSwitchFlagSetting(false);
+                remainingClock = 1<<17;
+                stopped = false;
+
+                pragma(msg, "DEBUG");
+                writeln("switch to double speed mode & continue");
+            }
+
             if((ifFlag & 0b00010000) != 0)
             {
                 ifFlag = 0x00;
@@ -117,7 +154,7 @@ final class GbcCpu : CpuItf
 
             if(interruptState != 0)
             {
-                foreach(int i ; 0..5)
+                foreach_reverse(int i ; 0..5)
                 {
                     if((interruptState & (0x01<<i)) != 0)
                     {
@@ -132,6 +169,7 @@ final class GbcCpu : CpuItf
                         pragma(msg, "Disable interrupts here ?");
                         instruction_di();
                         instruction_rst(0x40 + (i << 3));
+
                         return true;
                     }
                 }
@@ -704,16 +742,16 @@ final class GbcCpu : CpuItf
                 throw new Exception(format("Unknown instruction (opcode: 0x%0.2X, pc: 0x%0.4X)", instruction, pc.all));
         }
 
-pragma(msg, "DEBUG");
-/*
-        writefln("                                af=(%0.2X, %0.2X)", af.hi, af.lo);
-        writefln("                                bc=(%0.2X, %0.2X)", bc.hi, bc.lo);
-        writefln("                                de=(%0.2X, %0.2X)", de.hi, de.lo);
-        writefln("                                hl=(%0.2X, %0.2X)", hl.hi, hl.lo);
-        writefln("                                pc=%0.4X", pc.all);
-        writefln("                                sp=%0.4X", sp.all);
-        //stdin.readln();
-*/
+        static if(tracing)
+        {
+            writefln("trace/state/af/%0.2X/%0.2X", af.hi, af.lo);
+            writefln("trace/state/bc/%0.2X/%0.2X", bc.hi, bc.lo);
+            writefln("trace/state/de/%0.2X/%0.2X", de.hi, de.lo);
+            writefln("trace/state/hl/%0.2X/%0.2X", hl.hi, hl.lo);
+            writefln("trace/state/pc/%0.4X", pc.all);
+            writefln("trace/state/sp/%0.4X", sp.all);
+        }
+
         remainingClock = clockTaken - 1;
         return true;
     }
@@ -867,40 +905,32 @@ pragma(msg, "DEBUG");
 
     void instruction_rlca()
     {
+        flagsSetting!("chnz", "");
         cFlagSetting((af.hi & 0x80) != 0);
-        af.hi = cast(ubyte)((af.hi << 1) | (af.hi >> 7));
-        hFlagSetting(false);
-        nFlagSetting(false);
-        zFlagSetting(false);
+        af.hi = rol!(1,ubyte)(af.hi);
     }
 
     void instruction_rla()
     {
         ubyte newBit = cFlag ? 0x01 : 0x00;
+        flagsSetting!("chnz", "");
         cFlagSetting((af.hi & 0x80) != 0);
         af.hi = cast(ubyte)((af.hi << 1) | newBit);
-        hFlagSetting(false);
-        nFlagSetting(false);
-        zFlagSetting(false);
     }
 
     void instruction_rrca()
     {
+        flagsSetting!("chnz", "");
         cFlagSetting((af.hi & 0x01) != 0);
-        af.hi = cast(ubyte)((af.hi >> 1) | (af.hi << 7));
-        hFlagSetting(false);
-        nFlagSetting(false);
-        zFlagSetting(false);
+        af.hi = ror!(1,ubyte)(af.hi);
     }
 
     void instruction_rra()
     {
         ubyte newBit = cFlag ? 0x80 : 0x00;
+        flagsSetting!("chnz", "");
         cFlagSetting((af.hi & 0x01) != 0);
         af.hi = cast(ubyte)((af.hi >> 1) | newBit);
-        hFlagSetting(false);
-        nFlagSetting(false);
-        zFlagSetting(false);
     }
 
     void instruction_add(T, U)(auto ref T op1, U op2)
@@ -991,49 +1021,39 @@ pragma(msg, "DEBUG");
     void instruction_and(T)(T op)
     {
         af.hi = af.hi & cast(ubyte)op;
-        cFlagSetting(false);
-        hFlagSetting(true);
-        nFlagSetting(false);
+        flagsSetting!("cnz", "h");
         zFlagSetting(af.hi == 0);
     }
 
     void instruction_or(T)(T op)
     {
         af.hi = af.hi | cast(ubyte)op;
-        cFlagSetting(false);
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("chnz", "");
         zFlagSetting(af.hi == 0);
     }
 
     void instruction_xor(T)(T op)
     {
         af.hi = af.hi ^ cast(ubyte)op;
-        cFlagSetting(false);
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("chnz", "");
         zFlagSetting(af.hi == 0);
     }
 
     void instruction_ccf()
     {
         cFlagSetting(!cFlag);
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("hn", "");
     }
 
     void instruction_scf()
     {
-        cFlagSetting(true);
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("hn", "c");
     }
 
     void instruction_cpl()
     {
         af.hi ^= 0xFF;
-        hFlagSetting(true);
-        nFlagSetting(true);
+        flagsSetting!("", "hn");
     }
 
     void instruction_daa()
@@ -1187,8 +1207,7 @@ pragma(msg, "DEBUG");
         cFlagSetting((value & 0x80) != 0);
         ubyte tmp = cast(ubyte)((value << 1) | (value >> 7));
         op = tmp;
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("hn", "");
         zFlagSetting(tmp == 0);
     }
 
@@ -1198,8 +1217,7 @@ pragma(msg, "DEBUG");
         cFlagSetting((value & 0x01) != 0);
         ubyte tmp = cast(ubyte)((value >> 1) | (value << 7));
         op = tmp;
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("hn", "");
         zFlagSetting(tmp == 0);
     }
 
@@ -1210,8 +1228,7 @@ pragma(msg, "DEBUG");
         cFlagSetting((value & 0x80) != 0);
         ubyte tmp = cast(ubyte)((value << 1) | newBit);
         op = tmp;
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("hn", "");
         zFlagSetting(tmp == 0);
     }
 
@@ -1222,8 +1239,7 @@ pragma(msg, "DEBUG");
         cFlagSetting((value & 0x01) != 0);
         ubyte tmp = cast(ubyte)((value >> 1) | newBit);
         op = tmp;
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("hn", "");
         zFlagSetting(tmp == 0);
     }
 
@@ -1233,8 +1249,7 @@ pragma(msg, "DEBUG");
         cFlagSetting((value & 0x80) != 0);
         ubyte tmp = cast(ubyte)(value << 1);
         op = tmp;
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("hn", "");
         zFlagSetting(tmp == 0);
     }
 
@@ -1244,8 +1259,7 @@ pragma(msg, "DEBUG");
         cFlagSetting((value & 0x01) != 0);
         ubyte tmp = cast(ubyte)(value >> 1 | value & 0x80);
         op = tmp;
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("hn", "");
         zFlagSetting(tmp == 0);
     }
 
@@ -1253,9 +1267,7 @@ pragma(msg, "DEBUG");
     {
         ubyte tmp = cast(ubyte)op;
         op = cast(ubyte)((tmp << 4) | (tmp >> 4));
-        cFlagSetting(false);
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("chnz", "");
         zFlagSetting(tmp == 0);
     }
 
@@ -1265,13 +1277,13 @@ pragma(msg, "DEBUG");
         cFlagSetting((value & 0x01) != 0);
         ubyte tmp = cast(ubyte)(value >> 1);
         op = tmp;
-        hFlagSetting(false);
-        nFlagSetting(false);
+        flagsSetting!("hn", "");
         zFlagSetting(tmp == 0);
     }
 
     void instruction_bit(T, U)(T op1, auto ref U op2)
     {
+        flagsSetting!("hn", "");
         hFlagSetting(true);
         nFlagSetting(false);
         zFlagSetting((cast(ubyte)op2 & (1<<op1)) == 0);
@@ -1327,7 +1339,9 @@ pragma(msg, "DEBUG");
         enum auto increment = instructionSize(decoded);
 
         //pragma(msg, "Translation: instruction \"" ~ instructionCode ~ "\" convert to \"" ~ code ~ "\"")
-        //writefln("%0.4X:%s", pc.all, instructionCode);
+
+        static if(tracing)
+            writefln("trace/instruction/%0.4X/%s", pc.all, instructionCode);
 
         const ushort currentPc = pc.all;
         pc.all += increment;
@@ -1408,7 +1422,7 @@ pragma(msg, "DEBUG");
         if(operand.length > 0 && operand[0] == '[' && operand[$-1] == ']')
         {
             auto tmp = operand[1..$-1].findSplit("+");
-            string params = [tmp[0], tmp[2]].filter!(s => !s.empty).map!(s => translateOperand(s)).join("+");
+            const string params = [tmp[0], tmp[2]].filter!(s => !s.empty).map!(s => translateOperand(s)).join("+");
             return "Reference(mmu, cast(ushort)(" ~ params ~ "))";
         }
         else if(byteRegisters.keys.canFind(operand))
@@ -1431,54 +1445,147 @@ pragma(msg, "DEBUG");
 
     bool zFlag() const
     {
-        return (af.lo & 0x80) != 0;
+        enum ubyte mask = genMask("z");
+        return (af.lo & mask) != 0;
     }
 
     void zFlagSetting(bool set)
     {
+        enum ubyte mask = genMask("z");
+
         if(set)
-            af.lo = cast(ubyte)(af.lo | 0x80);
+            af.lo |= mask;
         else
-            af.lo = cast(ubyte)(af.lo & 0x7F);
+            af.lo &= ~mask;
     }
 
     bool nFlag() const
     {
-        return (af.lo & 0x40) != 0;
+        enum ubyte mask = genMask("n");
+        return (af.lo & mask) != 0;
     }
 
     void nFlagSetting(bool set)
     {
+        enum ubyte mask = genMask("n");
+
         if(set)
-            af.lo = cast(ubyte)(af.lo | 0x40);
+            af.lo |= mask;
         else
-            af.lo = cast(ubyte)(af.lo & 0xBF);
+            af.lo &= ~mask;
     }
 
     bool hFlag() const
     {
-        return (af.lo & 0x20) != 0;
+        enum ubyte mask = genMask("h");
+        return (af.lo & mask) != 0;
     }
 
     void hFlagSetting(bool set)
     {
+        enum ubyte mask = genMask("h");
+
         if(set)
-            af.lo = cast(ubyte)(af.lo | 0x20);
+            af.lo |= mask;
         else
-            af.lo = cast(ubyte)(af.lo & 0xDF);
+            af.lo &= ~mask;
     }
 
     bool cFlag() const
     {
-        return (af.lo & 0x10) != 0;
+        enum ubyte mask = genMask("c");
+        return (af.lo & mask) != 0;
     }
 
     void cFlagSetting(bool set)
     {
+        enum ubyte mask = genMask("c");
+
         if(set)
-            af.lo = cast(ubyte)(af.lo | 0x10);
+            af.lo |= mask;
         else
-            af.lo = cast(ubyte)(af.lo & 0xEF);
+            af.lo &= ~mask;
+    }
+
+    static ubyte genMask(in string flags)
+    {
+        ubyte mask = 0b00000000;
+
+        foreach(char flag ; flags)
+        {
+            if(flag == 'z')
+                mask |= 0b10000000;
+            else if(flag == 'n')
+                mask |= 0b01000000;
+            else if(flag == 'h')
+                mask |= 0b00100000;
+            else if(flag == 'c')
+                mask |= 0b00010000;
+            else
+                assert(0, "Unknown input flag");
+        }
+
+        return mask;
+    }
+
+    void flagsSetting(string disabledFlags, string enabledFlags)()
+    {
+        enum ubyte downMask = ~genMask(disabledFlags);
+        enum ubyte upMask = genMask(enabledFlags);
+        enum string allFlags = disabledFlags ~ enabledFlags;
+
+        static if(!allFlags.all!(a => (a == 'z' || a == 'n' || a == 'h' || a == 'c')))
+            assert(0, "Unknown input flag");
+
+        static if(allFlags.count("z") > 1 || allFlags.count("n") > 1 || allFlags.count("h") > 1 || allFlags.count("c") > 1)
+            assert(0, "Duplicate input flag");
+
+        static if(allFlags.length == 4)
+        {
+            af.lo = upMask;
+        }
+        else
+        {
+            static if(disabledFlags != "")
+                af.lo &= downMask;
+
+            static if(enabledFlags != "")
+                af.lo |= upMask;
+        }
+    }
+
+    bool doubleSpeedFlag() const
+    {
+        immutable ubyte mask = 0b10000000;
+
+        return (doubleSpeedMode & mask) != 0;
+    }
+
+    void doubleSpeedFlagSetting(bool set)
+    {
+        immutable ubyte mask = 0b10000000;
+
+        if(set)
+            doubleSpeedMode |= mask;
+        else
+            doubleSpeedMode &= ~mask;
+    }
+
+    bool doubleSpeedSwitchFlag() const
+    {
+        immutable ubyte mask = 0b00000001;
+
+        return (doubleSpeedMode & mask) != 0;
+    }
+
+    void doubleSpeedSwitchFlagSetting(bool set)
+    {
+        immutable ubyte mask = 0b00000001;
+
+        if(set)
+            doubleSpeedMode |= mask;
+        else
+            doubleSpeedMode &= ~mask;
     }
 };
 

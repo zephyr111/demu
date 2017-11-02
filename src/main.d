@@ -110,7 +110,9 @@ void emuThread(string filename)
         mmu.connectJoystick(joystick);
         mmu.connectSerialPort(serialPort);
         timaTimer.connectCpu(cpu);
+        dividerTimer.connectCpu(cpu);
         joystick.connectCpu(cpu);
+        serialPort.connectCpu(cpu);
 
         // A revoir !
         receive(
@@ -125,19 +127,18 @@ void emuThread(string filename)
         int clock = 0;
         bool running = false;
 
-        cpu.init();
-
         StopWatch chrono;
         chrono.start();
 
         do
         {
-            running = cpu.tick(); // 30%
-            gpu.tick(); // 30%
-            timaTimer.tick(); // 16%
-            joystick.tick(); // 8%
-            soundController.tick(); // 8%
-            serialPort.tick(); // 8%
+            running = cpu.tick(); // 38%
+            gpu.tick(); // 12%
+            timaTimer.tick(); // 4%
+            dividerTimer.tick(); // 10%
+            joystick.tick(); // 4%
+            soundController.tick(); // 20% (with clockStep=16)
+            serialPort.tick(); // 12%
             clock++;
 
             // Every syncFrequency Hz

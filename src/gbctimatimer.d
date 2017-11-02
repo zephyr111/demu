@@ -1,5 +1,6 @@
 module gbctimatimer;
 
+import std.stdio;
 import interfaces.timatimer;
 import interfaces.cpu;
 import genericgbctimer;
@@ -7,9 +8,13 @@ import genericgbctimer;
 
 final class GbcTimaTimer : TimaTimerItf
 {
-    ubyte mode = 0x00;
     static immutable frequencies = [4096, 262144, 65536, 16384];
-    GenericGbcTimer timer;
+    ubyte mode = 0b11111000;
+    ubyte internalValue = 0;
+    ubyte resetVal = 0;
+    uint freq = 0;
+    ulong internalClock = 0;
+    bool started;
     CpuItf cpu;
 
 
@@ -17,27 +22,28 @@ final class GbcTimaTimer : TimaTimerItf
 
     this()
     {
-        timer = new GenericGbcTimer(frequencies[mode & 0x03], (mode & 0x04) != 0);
+        freq = frequencies[mode & 0b00000011];
+        started = (mode & 0b00000100) != 0;
     }
 
     ubyte readCounter()
     {
-        return timer.clock();
+        return internalValue;
     }
 
     void writeCounter(ubyte value)
     {
-        timer.setClock(value);
+        internalValue = value;
     }
 
     ubyte readModulo()
     {
-        return timer.resetValue();
+        return resetVal;
     }
 
     void writeModulo(ubyte value)
     {
-        timer.setResetValue(value);
+        resetVal = value;
     }
 
     ubyte readControl()
@@ -47,19 +53,38 @@ final class GbcTimaTimer : TimaTimerItf
 
     void writeControl(ubyte value)
     {
-        mode = value & 0x07;
-        timer.setFrequency(frequencies[mode & 0x03]);
-        if((value & 0x04) == 0)
-            timer.stop();
-        else
-            timer.start();
+        mode = value | 0b11111000;
+        internalClock = 0;
+        freq = frequencies[mode & 0b00000011];
+        started = (value & 0b00000100) != 0;
     }
 
     void tick()
     {
-        if(timer.clock() == 0xFF)
-            cpu.addInterruptRequests(0x04);
-        timer.tick();
+        static immutable uint cpuFrequency = 4_194_304;
+
+        if(started)
+        {
+            if((cpu.doubleSpeedState() & 0b10000000) != 0)
+                internalClock += 2;
+            else
+                internalClock++;
+
+            if(internalClock*freq >= cpuFrequency)
+            {
+                internalClock = 0;
+
+                if(internalValue == 0xFF)
+                {
+                    internalValue = resetVal;
+                    cpu.addInterruptRequests(0b00000100);
+                }
+                else
+                {
+                    internalValue++;
+                }
+            }
+        }
     }
 
     void connectCpu(CpuItf cpu)
