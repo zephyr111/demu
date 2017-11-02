@@ -13,7 +13,10 @@ if len(sys.argv) != 2:
 
 with open(sys.argv[1]) as f:
 	data = f
-	for line in data:
+	for lineId, line in enumerate(data):
+		if lineId % 65536 == 0:
+			sys.stdout.write("\rParsing (%dK lines computed)..." % (lineId/1000))
+			sys.stdout.flush()
 		line = line.strip()
 		if line.startswith('trace'):
 			elems = line.split('/')
@@ -26,6 +29,9 @@ with open(sys.argv[1]) as f:
 			elif elems[1] == 'instruction':
 				code[elems[2]] = elems[3]
 				t += 1
+	sys.stdout.write("\nParsing completed\n")
+	sys.stdout.flush()
+	assert len(state) > 0
 	# Get back to a valid final state
 	while t not in state or state[t] == {}:
 		t -= 1
