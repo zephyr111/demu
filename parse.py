@@ -18,12 +18,19 @@ with open(sys.argv[1]) as f:
 		if line.startswith('trace'):
 			elems = line.split('/')
 			if elems[1] == 'state':
-				state[t][elems[2]] = ' '.join(elems[3:])
+				tmp = dict()
+				for i in range(2, len(elems)):
+					register, _, content = elems[i].partition(':')
+					tmp[register] = content
+				state[t] = tmp
 			elif elems[1] == 'instruction':
 				code[elems[2]] = elems[3]
 				t += 1
-				state[t] = dict()
+	# Get back to a valid final state
+	while t not in state or state[t] == {}:
+		t -= 1
 	tMax = t
+	print state[tMax]
 
 def htoi(h):
 	return int(h, 16)

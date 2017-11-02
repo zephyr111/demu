@@ -24,6 +24,13 @@ final class GbcSoundController : Mmu8bItf
 {
     private:
 
+    enum ClockState
+    {
+        ENABLED,
+        CLOCK_ONCE,
+        LOCKED
+    }
+
     struct SoundValue
     {
         // Normalized values in [-1.0f, 1.0f]
@@ -38,20 +45,25 @@ final class GbcSoundController : Mmu8bItf
     ubyte channel1_volumeEnvelope = 0xF3;
     ubyte channel1_frequencyLo = 0x00; // Init value undefined
     ubyte channel1_frequencyHi = 0xBF;
+    ClockState channel1_internalSweepState = ClockState.LOCKED;
+    bool channel1_internalLengthLock = false;
     ubyte channel2_soundLength = 0x3F;
     ubyte channel2_volumeEnvelope = 0x00;
     ubyte channel2_frequencyLo = 0x00; // Init value undefined
     ubyte channel2_frequencyHi = 0xBF;
+    bool channel2_internalLengthLock = false;
     ubyte channel3_soundOnOff = 0x7F;
     ubyte channel3_soundLength = 0xFF;
     ubyte channel3_volume = 0x9F;
     ubyte channel3_frequencyLo = 0x00; // Init value undefined
     ubyte channel3_frequencyHi = 0xBF;
     ubyte[16] channel3_wavePatternRam = 0xFF; // Init value undefined
+    bool channel3_internalLengthLock = false;
     ubyte channel4_soundLength = 0xFF;
     ubyte channel4_volumeEnvelope = 0x00;
     ubyte channel4_polynomialCounter = 0x00;
     ubyte channel4_control = 0xBF;
+    bool channel4_internalLengthLock = false;
     ubyte channelControl = 0x77;
     ubyte soundOutput = 0xF3;
     ubyte soundEnabled = 0xF0; // 0xF1 for GB, 0xF0 for SGB
@@ -182,23 +194,31 @@ final class GbcSoundController : Mmu8bItf
         channel1_volumeEnvelope = 0x00;
         channel1_frequencyLo = 0xFF;
         channel1_frequencyHi = 0xBF;
+        channel1_internalSweepState = ClockState.LOCKED;
+        channel1_internalLengthLock = false;
         channel2_soundLength = 0x3F;
         pragma(msg, "TODO: Check the value of the channel2_volumeEnvelope: test n°1 say 0x00, GCB manual say nothing (default: 0xF3)");
         channel2_volumeEnvelope = 0x00;
         channel2_frequencyLo = 0xFF;
         channel2_frequencyHi = 0xBF;
+        channel2_internalLengthLock = false;
         channel3_soundOnOff = 0x7F;
         channel3_soundLength = 0xFF;
         channel3_volume = 0x9F;
         channel3_frequencyLo = 0xFF;
         channel3_frequencyHi = 0xBF;
+        channel3_internalLengthLock = false;
         channel4_soundLength = 0xFF;
         channel4_volumeEnvelope = 0x00;
         channel4_polynomialCounter = 0x00;
         channel4_control = 0xBF;
+        channel4_internalLengthLock = false;
         channelControl = 0x00;
         soundOutput = 0x00;
         soundEnabled = 0x70;
+
+        if(useCgb)
+            internalClock = 0;
 
         //alSourcei(alSource, AL_BUFFER, 0);
         //checkErrors("Unable to unbind the sound buffer of an OpenAL sound");
@@ -209,7 +229,7 @@ final class GbcSoundController : Mmu8bItf
 
     ubyte loadByte(ushort address)
     {
-//writefln("DEBUG: read(address: %0.2X)", address);
+writefln("DEBUG: read(address: %0.2X)", address);
         switch(address)
         {
             // Channel 1 Sweep register
@@ -320,19 +340,22 @@ final class GbcSoundController : Mmu8bItf
 
     void saveByte(ushort address, ubyte value)
     {
-//writefln("DEBUG: write(address: %0.2X, value: %0.2X)", address, value);
+writefln("DEBUG: write(address: %0.2X, value: %0.2X)", address, value);
         switch(address)
         {
             // Channel 1 Sweep register
             case 0xFF10:
                 if((soundEnabled & 0b10000000) != 0)
-                    channel1_sweep = (channel1_sweep & 0b10000000) | (value & 0b01111111);
+                    channel1_sweep = value | 0b10000000;
                 break;
 
             // Channel 1 Sound length/Wave pattern duty
             case 0xFF11:
                 if((soundEnabled & 0b10000000) != 0)
+                {
                     channel1_soundLength = value;
+                    channel1_internalLengthLock = false;
+                }
                 break;
 
             // Channel 1 Volume Envelope
@@ -357,18 +380,64 @@ final class GbcSoundController : Mmu8bItf
             case 0xFF14:
                 if((soundEnabled & 0b10000000) != 0)
                 {
+                    const bool enabledBefore = (channel1_frequencyHi & 0b10000000) == 0;
+                    const bool loopBefore = (channel1_frequencyHi & 0b01000000) == 0;
+
                     channel1_frequencyHi = value | 0b00111000;
+
+                    const bool enabled = (channel1_frequencyHi & 0b10000000) != 0;
+                    const bool loop = (channel1_frequencyHi & 0b01000000) == 0;
+
+///////////////////
+writeln("[1] TRIGGER (len=", channel1_soundLength & 0b00111111, ")");
+
+                    if(internalClock % 16384 <= 8192)
+                    {
+                        if(loopBefore && !loop && !channel1_internalLengthLock)
+                        {
+                            if((channel1_soundLength & 0b00111111) == 0b00111111)
+                            {
+writeln("[1] LEN_LOCKED (TRIGGER NOLOOP)");
+                                soundEnabled &= 0b11111110;
+                                channel1_frequencyHi &= 0b01111111;
+                                channel1_internalLengthLock = true;
+                            }
+
+                            channel1_soundLength = (channel1_soundLength & 0b11000000) | ((channel1_soundLength + 1) & 0b00111111);
+writeln("[1] LEN_CLOCKED (TRIGGER NOLOOP) to ", channel1_soundLength & 0b00111111);
+                        }
+
+                        if(enabled && channel1_internalLengthLock)
+                        {
+writeln("[1] LEN_UNLOCKED (TRIGGER ENABLE)");
+                            channel1_internalLengthLock = false;
+
+                            if(!loop)
+                            {
+                                if((channel1_soundLength & 0b00111111) == 0b00111111)
+                                {
+writeln("[1] LEN_LOCKED (TRIGGER ENABLE)");
+                                    soundEnabled &= 0b11111110;
+                                    channel1_frequencyHi &= 0b01111111;
+                                    channel1_internalLengthLock = true;
+                                }
+
+                                channel1_soundLength = (channel1_soundLength & 0b11000000) | ((channel1_soundLength + 1) & 0b00111111);
+writeln("[1] LEN_CLOCKED (TRIGGER ENABLE) to ", channel1_soundLength & 0b00111111);
+                            }
+                        }
+                    }
+                    else if(enabled)
+                    {
+                        channel1_internalLengthLock = false;
+                    }
+///////////////////
 
                     if((channel1_frequencyHi & 0b10000000) != 0)
                     {
                         pragma(msg, "TODO: Check if channel sound should not be enabled when the volume is set to 0 and the volume is decreased (cf test 2 passed)");
                         if((channel1_volumeEnvelope & 0b11110000) != 0 || (channel1_volumeEnvelope & 0b00001000) != 0)
-                        {
                             soundEnabled |= 0b00000001;
-
-                            if((channel1_frequencyHi & 0b01000000) == 0)
-                                channel1_soundLength &= 0b11000000;
-                        }
 
 ///////////////////////////////////////////////////////////////////////////////
                         const float sweepTime = (channel1_sweep & 0b01110000) >> 4;
@@ -388,10 +457,12 @@ final class GbcSoundController : Mmu8bItf
                                 {
                                     channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
                                     channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+writefln("[1] SWEEP_CLOCK (trigger increase to freq=%0.2X|%0.2X)", channel1_frequencyHi, channel1_frequencyLo);
                                 }
                                 else
                                 {
                                     soundEnabled &= 0b11111110;
+writefln("[1] SWEEP_SOUND_DISABLE (trigger increase)");
                                 }
                             }
                             else
@@ -402,18 +473,31 @@ final class GbcSoundController : Mmu8bItf
                                 {
                                     channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
                                     channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+writefln("[1] SWEEP_CLOCK (trigger decrease to freq=%0.2X|%0.2X)", channel1_frequencyHi, channel1_frequencyLo);
                                 }
                                 else
                                 {
                                     soundEnabled &= 0b11111110;
+writefln("[1] SWEEP_SOUND_DISABLE (trigger decrease)");
                                 }
                             }
                         }
 
-                        if(sweepShiftCount > 0 || sweepTime > 0)
-                            channel1_sweep |= 0b10000000;
+                        if(sweepShiftCount > 0 && sweepTime > 0)
+                        {
+                            channel1_internalSweepState = ClockState.ENABLED;
+writefln("[1] SWEEP_STATE=ENABLED (trigger)");
+                        }
+                        else if(sweepTime > 0 || sweepShiftCount > 0)
+                        {
+                            channel1_internalSweepState = ClockState.CLOCK_ONCE;
+writefln("[1] SWEEP_STATE=CLOCK_ONCE (trigger)");
+                        }
                         else
-                            channel1_sweep &= 0b01111111;
+                        {
+                            channel1_internalSweepState = ClockState.LOCKED;
+writefln("[1] SWEEP_STATE=LOCKED (trigger)");
+                        }
 ///////////////////////////////////////////////////////////////////////////////
                     }
                 }
@@ -451,19 +535,65 @@ final class GbcSoundController : Mmu8bItf
             case 0xFF19:
                 if((soundEnabled & 0b10000000) != 0)
                 {
+                    const bool enabledBefore = (channel2_frequencyHi & 0b10000000) == 0;
+                    const bool loopBefore = (channel2_frequencyHi & 0b01000000) == 0;
+
                     channel2_frequencyHi = value | 0b00111000;
+
+                    const bool enabled = (channel2_frequencyHi & 0b10000000) != 0;
+                    const bool loop = (channel2_frequencyHi & 0b01000000) == 0;
 
                     if((channel2_frequencyHi & 0b10000000) != 0)
                     {
                         pragma(msg, "TODO: Check if channel sound should not be enabled when the volume is set to 0 and the volume is decreased (cf test 2 passed)");
                         if((channel2_volumeEnvelope & 0b11110000) != 0 || (channel2_volumeEnvelope & 0b00001000) != 0)
-                        {
                             soundEnabled |= 0b00000010;
+                    }
 
-                            if((channel2_frequencyHi & 0b01000000) == 0)
-                                channel2_soundLength &= 0b11000000;
+///////////////////
+writeln("[2] TRIGGER (len=", channel2_soundLength & 0b00111111, ")");
+
+                    if(internalClock % 16384 <= 8192)
+                    {
+                        if(loopBefore && !loop && !channel2_internalLengthLock)
+                        {
+                            if((channel2_soundLength & 0b00111111) == 0b00111111)
+                            {
+writeln("[2] LEN_LOCKED (TRIGGER NOLOOP)");
+                                soundEnabled &= 0b11111101;
+                                channel2_frequencyHi &= 0b01111111;
+                                channel2_internalLengthLock = true;
+                            }
+
+                            channel2_soundLength = (channel2_soundLength & 0b11000000) | ((channel2_soundLength + 1) & 0b00111111);
+writeln("[2] LEN_CLOCKED (TRIGGER NOLOOP) to ", channel2_soundLength & 0b00111111);
+                        }
+
+                        if(enabled && channel2_internalLengthLock)
+                        {
+writeln("[2] LEN_UNLOCKED (TRIGGER ENABLE)");
+                            channel2_internalLengthLock = false;
+
+                            if(!loop)
+                            {
+                                if((channel2_soundLength & 0b00111111) == 0b00111111)
+                                {
+writeln("[2] LEN_LOCKED (TRIGGER ENABLE)");
+                                    soundEnabled &= 0b11111101;
+                                    channel2_frequencyHi &= 0b01111111;
+                                    channel2_internalLengthLock = true;
+                                }
+
+                                channel2_soundLength = (channel2_soundLength & 0b11000000) | ((channel2_soundLength + 1) & 0b00111111);
+writeln("[2] LEN_CLOCKED (TRIGGER ENABLE) to ", channel2_soundLength & 0b00111111);
+                            }
                         }
                     }
+                    else if(enabled)
+                    {
+                        channel2_internalLengthLock = false;
+                    }
+///////////////////
                 }
                 break;
 
@@ -502,19 +632,65 @@ final class GbcSoundController : Mmu8bItf
             case 0xFF1E:
                 if((soundEnabled & 0b10000000) != 0)
                 {
+                    const bool enabledBefore = (channel3_frequencyHi & 0b10000000) == 0;
+                    const bool loopBefore = (channel3_frequencyHi & 0b01000000) == 0;
+
                     channel3_frequencyHi = value | 0b00111000;
+
+                    const bool enabled = (channel3_frequencyHi & 0b10000000) != 0;
+                    const bool loop = (channel3_frequencyHi & 0b01000000) == 0;
 
                     if((channel3_frequencyHi & 0b10000000) != 0)
                     {
                         pragma(msg, "TODO: Check if channel sound should not be enabled when the volume is set to 0 and the sound stoped (cf test 2 passed)");
                         if((channel3_volume & 0b01100000) != 0 || (channel3_soundOnOff & 0b10000000) != 0)
-                        {
                             soundEnabled |= 0b00000100;
+                    }
 
-                            if((channel3_frequencyHi & 0b01000000) == 0)
-                                channel3_soundLength &= 0;
+///////////////////
+writeln("[3] TRIGGER (len=", channel3_soundLength, ")");
+
+                    if(internalClock % 16384 <= 8192)
+                    {
+                        if(loopBefore && !loop && !channel3_internalLengthLock)
+                        {
+                            if(channel3_soundLength == 0b11111111)
+                            {
+writeln("[3] LEN_LOCKED (TRIGGER NOLOOP)");
+                                soundEnabled &= 0b11111011;
+                                channel3_frequencyHi &= 0b01111111;
+                                channel3_internalLengthLock = true;
+                            }
+
+                            channel3_soundLength++;
+writeln("[3] LEN_CLOCKED (TRIGGER NOLOOP) to ", channel3_soundLength);
+                        }
+
+                        if(enabled && channel3_internalLengthLock)
+                        {
+writeln("[3] LEN_UNLOCKED (TRIGGER ENABLE)");
+                            channel3_internalLengthLock = false;
+
+                            if(!loop)
+                            {
+                                if(channel3_soundLength == 0b11111111)
+                                {
+writeln("[3] LEN_LOCKED (TRIGGER ENABLE)");
+                                    soundEnabled &= 0b11111011;
+                                    channel3_frequencyHi &= 0b01111111;
+                                    channel3_internalLengthLock = true;
+                                }
+
+                                channel3_soundLength++;
+writeln("[3] LEN_CLOCKED (TRIGGER ENABLE) to ", channel3_soundLength);
+                            }
                         }
                     }
+                    else if(enabled)
+                    {
+                        channel3_internalLengthLock = false;
+                    }
+///////////////////
                 }
                 break;
 
@@ -550,19 +726,65 @@ final class GbcSoundController : Mmu8bItf
             case 0xFF23:
                 if((soundEnabled & 0b10000000) != 0)
                 {
+                    const bool enabledBefore = (channel4_control & 0b10000000) == 0;
+                    const bool loopBefore = (channel4_control & 0b01000000) == 0;
+
                     channel4_control = value | 0b00111111;
+
+                    const bool enabled = (channel4_control & 0b10000000) != 0;
+                    const bool loop = (channel4_control & 0b01000000) == 0;
 
                     if((channel4_control & 0b10000000) != 0)
                     {
                         pragma(msg, "TODO: Check if channel sound should not be enabled when the volume is set to 0 and the volume is decreased (cf test 2 passed)");
                         if((channel4_volumeEnvelope & 0b11110000) != 0 || (channel4_volumeEnvelope & 0b00001000) != 0)
-                        {
                             soundEnabled |= 0b00001000;
+                    }
 
-                            if((channel4_control & 0b01000000) == 0)
-                                channel4_soundLength &= 0b11000000;
+///////////////////
+writeln("[4] TRIGGER (len=", channel4_soundLength & 0b00111111, ")");
+
+                    if(internalClock % 16384 <= 8192)
+                    {
+                        if(loopBefore && !loop && !channel4_internalLengthLock)
+                        {
+                            if((channel4_soundLength & 0b00111111) == 0b00111111)
+                            {
+writeln("[4] LEN_LOCKED (TRIGGER NOLOOP)");
+                                soundEnabled &= 0b11110111;
+                                channel4_control &= 0b01111111;
+                                channel4_internalLengthLock = true;
+                            }
+
+                            channel4_soundLength = (channel4_soundLength & 0b11000000) | ((channel4_soundLength + 1) & 0b00111111);
+writeln("[4] LEN_CLOCKED (TRIGGER NOLOOP) to ", channel4_soundLength & 0b00111111);
+                        }
+
+                        if(enabled && channel4_internalLengthLock)
+                        {
+writeln("[4] LEN_UNLOCKED (TRIGGER ENABLE)");
+                            channel4_internalLengthLock = false;
+
+                            if(!loop)
+                            {
+                                if((channel4_soundLength & 0b00111111) == 0b00111111)
+                                {
+writeln("[4] LEN_LOCKED (TRIGGER ENABLE)");
+                                    soundEnabled &= 0b11110111;
+                                    channel4_control &= 0b01111111;
+                                    channel4_internalLengthLock = true;
+                                }
+
+                                channel4_soundLength = (channel4_soundLength & 0b11000000) | ((channel4_soundLength + 1) & 0b00111111);
+writeln("[4] LEN_CLOCKED (TRIGGER ENABLE) to ", channel4_soundLength & 0b00111111);
+                            }
                         }
                     }
+                    else if(enabled)
+                    {
+                        channel4_internalLengthLock = false;
+                    }
+///////////////////
                 }
                 break;
 
@@ -583,10 +805,7 @@ final class GbcSoundController : Mmu8bItf
                 soundEnabled = (soundEnabled & 0b01111111) | (value & 0b10000000);
 
                 if((soundEnabled & 0b10000000) == 0)
-                {
                     resetRegisters();
-                    soundEnabled = 0b01110000;
-                }
                 break;
 
             // Nothing
@@ -674,12 +893,13 @@ final class GbcSoundController : Mmu8bItf
                 const bool sweepIncreased = (channel1_sweep & 0b0001000) == 0;
                 const uint sweepShiftCount = channel1_sweep & 0b0000111;
 
-                if(sweepTime > 0 && (channel1_sweep & 0b10000000) != 0)
+                if(channel1_internalSweepState == ClockState.ENABLED && sweepShiftCount > 0 && sweepTime > 0
+                        || channel1_internalSweepState == ClockState.CLOCK_ONCE)
                 {
-                    //const float realSweepTime = (sweepTime > 0) ? sweepTime : 8;
+                    const float realSweepTime = (sweepTime > 0) ? sweepTime : 8;
 
                     pragma(msg, "TODO: To check - Possible bug with the modulo since sweepShiftCount is not a power of two and internalClock is reset every 2**22");
-                    if((internalClock / (cpuFrequency / 128)) % sweepTime == 0)
+                    if(sweepTime > 0 && (internalClock / (cpuFrequency / 128)) % sweepTime == 0)
                     {
                         if(sweepIncreased)
                         {
@@ -689,11 +909,14 @@ final class GbcSoundController : Mmu8bItf
                             {
                                 channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
                                 channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+writefln("[1] SWEEP_CLOCK (tick increase to freq=%0.2X|%0.2X)", channel1_frequencyHi, channel1_frequencyLo);
                             }
                             else
                             {
                                 pragma(msg, "TODO: To check - disable other registers ?");
                                 soundEnabled &= 0b11111110;
+                                channel1_internalSweepState = ClockState.LOCKED;
+writefln("[1] SWEEP_SOUND_DISABLE (tick increase)");
                             }
                         }
                         else
@@ -704,27 +927,39 @@ final class GbcSoundController : Mmu8bItf
                             {
                                 channel1_frequencyHi = (channel1_frequencyHi & 0b11111000) | ((newFrequencyRegister >> 8) & 0b00000111);
                                 channel1_frequencyLo = newFrequencyRegister & 0b11111111;
+writefln("[1] SWEEP_CLOCK (tick decrease to freq=%0.2X|%0.2X)", channel1_frequencyHi, channel1_frequencyLo);
                             }
                             else
                             {
                                 pragma(msg, "TODO: To check - disable other registers ?");
                                 soundEnabled &= 0b11111110;
+                                channel1_internalSweepState = ClockState.LOCKED;
+writefln("[1] SWEEP_SOUND_DISABLE (tick decrease)");
                             }
                         }
+                    }
+
+                    if(channel1_internalSweepState == ClockState.CLOCK_ONCE)
+                    {
+                        channel1_internalSweepState = ClockState.ENABLED;
+                        writefln("[1] SWEEP_STATE=ENABLED (tick)");
                     }
                 }
             }
         }
 
-        if(!loop && internalClock % 16384 == 8192)
+        if(!loop && !channel1_internalLengthLock && internalClock % 16384 == 0)
         {
             if((channel1_soundLength & 0b00111111) == 0b00111111)
             {
+writeln("[1] LEN_LOCKED (TICK)");
                 soundEnabled &= 0b11111110;
                 channel1_frequencyHi &= 0b01111111;
+                channel1_internalLengthLock = true;
             }
 
             channel1_soundLength = (channel1_soundLength & 0b11000000) | ((channel1_soundLength + 1) & 0b00111111);
+writeln("[1] LEN_CLOCKED (TICK) to ", channel1_soundLength & 0b00111111);
         }
 
         return SoundValue(soundValue, soundValue);
@@ -793,15 +1028,18 @@ final class GbcSoundController : Mmu8bItf
             }
         }
 
-        if(!loop && internalClock % 16384 == 8192)
+        if(!loop && internalClock % 16384 == 0)
         {
             if((channel2_soundLength & 0b00111111) == 0b00111111)
             {
+writeln("[2] LEN_LOCKED (TICK)");
                 soundEnabled &= 0b11111101;
                 channel2_frequencyHi &= 0b01111111;
+                channel2_internalLengthLock = false;
             }
 
             channel2_soundLength = (channel2_soundLength & 0b11000000) | ((channel2_soundLength + 1) & 0b00111111);
+writeln("[2] LEN_CLOCKED (TICK) to ", channel2_soundLength & 0b00111111);
         }
 
         return SoundValue(soundValue, soundValue);
@@ -845,15 +1083,18 @@ final class GbcSoundController : Mmu8bItf
                 channelCur[2] = fmod(channelCur[2], 256.0f);
         }
 
-        if(!loop && internalClock % 16384 == 8192)
+        if(!loop && internalClock % 16384 == 0)
         {
             if(channel3_soundLength == 0b11111111)
             {
+writeln("[3] LEN_LOCKED (TICK)");
                 soundEnabled &= 0b11111011;
                 channel3_frequencyHi &= 0b01111111;
+                channel3_internalLengthLock = false;
             }
 
             channel3_soundLength++;
+writeln("[3] LEN_CLOCKED (TICK) to ", channel3_soundLength);
         }
 
         return SoundValue(soundValue, soundValue);
@@ -910,15 +1151,18 @@ final class GbcSoundController : Mmu8bItf
             }
         }
 
-        if(!loop && internalClock % 16384 == 8192)
+        if(!loop && internalClock % 16384 == 0)
         {
             if((channel4_soundLength & 0b00111111) == 0b00111111)
             {
+writeln("[4] LEN_LOCKED (TICK)");
                 soundEnabled &= 0b11110111;
                 channel4_control &= 0b01111111;
+                channel4_internalLengthLock = false;
             }
 
             channel4_soundLength = (channel4_soundLength & 0b11000000) | ((channel4_soundLength + 1) & 0b00111111);
+writeln("[4] LEN_CLOCKED (TICK) to ", channel4_soundLength & 0b00111111);
         }
 
         return SoundValue(soundValue, soundValue);
@@ -947,7 +1191,8 @@ final class GbcSoundController : Mmu8bItf
     {
         pragma(msg, "TODO: Do not forget to decrease/increase the sound volume over time (because it can be read)");
 
-        internalClock++;
+        if(useCgb || (soundEnabled & 0b10000000) != 0)
+            internalClock++;
 
         if(internalClock % clockStep == 0)
         {
@@ -965,7 +1210,6 @@ final class GbcSoundController : Mmu8bItf
                 const SoundValue soundValue = normalize(mixSound([soundValueChan1, soundValueChan2, soundValueChan3, soundValueChan4]));
                 bufferLeftSoundValue = cast(short)(soundValue.left * soundAmplitude);
                 bufferRightSoundValue = cast(short)(soundValue.right * soundAmplitude);
-
             }
 
             const uint buffId = (bufferCur / soundBufferSize) % bufferCount;

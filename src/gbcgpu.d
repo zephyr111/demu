@@ -21,6 +21,11 @@ final class GbcGpu : Mmu8bItf
 
     private:
 
+    version(gpu_tracing)
+        static immutable bool tracing = true;
+    else
+        static immutable bool tracing = false;
+
     immutable bool useCgb;
     ubyte[0x4000] videoRam = 0x00; // 16 Ko (note: 8Ko for pre-GBC console)
     ubyte[0xA0] spriteAttributeTable = 0x00; // 160 octets (40 entries x 4 octets)
@@ -101,7 +106,7 @@ final class GbcGpu : Mmu8bItf
                         return windowX;
 
                     case 0xFF4F:
-                        return ramBank;
+                        return ramBank | 0b11111110;
 
                     case 0xFF68:
                         return cgbBgPaletteId;
@@ -183,7 +188,7 @@ final class GbcGpu : Mmu8bItf
 
                     case 0xFF4F:
                         if(useCgb)
-                            ramBank = value & 0x01;
+                            ramBank = value & 0b00000001;
                         else
                             writefln("WARNING: writting on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
                         break;
@@ -252,6 +257,7 @@ final class GbcGpu : Mmu8bItf
                             statInt();
 
                         vSyncInt();
+                        renderer.swapBuffers();
                         pragma(msg, "TODO: vsync here ? (yes, but check before on Zelda with double speed mode)");
                     }
                     else
@@ -335,9 +341,9 @@ final class GbcGpu : Mmu8bItf
         const uint paletteOffset = paletteId*8 + tilePixel*2;
         const ubyte colorByte1 = cgbBgPaletteData[paletteOffset+0];
         const ubyte colorByte2 = cgbBgPaletteData[paletteOffset+1];
-        const ubyte blue = (colorByte1 & 0b00011111) << 3;
+        const ubyte red = (colorByte1 & 0b00011111) << 3;
         const ubyte green = ((colorByte2 & 0b00000011) << 6) | ((colorByte1 & 0b11100000) >> 2);
-        const ubyte red = (colorByte2 & 0b01111100) << 1;
+        const ubyte blue = (colorByte2 & 0b01111100) << 1;
         return Color(red, green, blue);
     }
 
@@ -352,22 +358,22 @@ final class GbcGpu : Mmu8bItf
         const uint paletteOffset = paletteId*8 + tilePixel*2;
         const ubyte colorByte1 = cgbSpritePaletteData[paletteOffset+0];
         const ubyte colorByte2 = cgbSpritePaletteData[paletteOffset+1];
-        const ubyte blue = (colorByte1 & 0b00011111) << 3;
+        const ubyte red = (colorByte1 & 0b00011111) << 3;
         const ubyte green = ((colorByte2 & 0b00000011) << 6) | ((colorByte1 & 0b11100000) >> 2);
-        const ubyte red = (colorByte2 & 0b01111100) << 1;
+        const ubyte blue = (colorByte2 & 0b01111100) << 1;
         return Color(red, green, blue);
     }
 
     // Not synchronized with the LCD screen
     void renderBgScanline(uint y)
     {
-        const uint tileMapOffset = (bgMapBaseFlag == 0) ? 0x0000 : 0x0400;
-        const(ubyte)[] tileMap = videoRam[tileMapOffset+0x1800..tileMapOffset+0x1C00];
-        const(ubyte)[] cgbTileMap = videoRam[tileMapOffset+0x3800..tileMapOffset+0x3C00];
+        const uint tileMapOffset = (bgMapBaseFlag == 0) ? 0x1800 : 0x1C00;
+        const(ubyte)[] tileMap = videoRam[tileMapOffset..tileMapOffset+0x0400];
+        const(ubyte)[] cgbTileMap = videoRam[0x2000+tileMapOffset..0x2000+tileMapOffset+0x0400];
 
         const uint tileSetOffset = (bgAndWindowTileBaseFlag == 0) ? 0x0800 : 0x0000;
-        const(ubyte)[] tileSet = videoRam[tileSetOffset+0x0000..tileSetOffset+0x1000];
-        const(ubyte)[] cgbTileSet = videoRam[tileSetOffset+0x2000..tileSetOffset+0x3000];
+        const(ubyte)[] tileSet = videoRam[tileSetOffset..tileSetOffset+0x1000];
+        const(ubyte)[] cgbTileSet = videoRam[0x2000+tileSetOffset..0x2000+tileSetOffset+0x1000];
 
         const ubyte tileIdMask = (bgAndWindowTileBaseFlag == 0) ? 0x80 : 0x00;
 
@@ -406,7 +412,10 @@ final class GbcGpu : Mmu8bItf
                         const Color color = cgbBgColor(cgbPaletteId, pixel);
 
                         tmpRawLine[x] = pixel;
-                        scanLine[x] = color;
+                        static if(tracing)
+                            scanLine[x] = Color(color.r/4+191, (yFlip) ? color.g/4+127 : color.g/4+63, (xFlip) ? color.b/4+127 : color.b/4+31);
+                        else
+                            scanLine[x] = color;
                         //renderer.setPixel(x, y, color);
                     }
                 }
@@ -428,7 +437,10 @@ final class GbcGpu : Mmu8bItf
                         const Color color = sgbBgColor(pixel);
 
                         tmpRawLine[x] = pixel;
-                        scanLine[x] = color;
+                        static if(tracing)
+                            scanLine[x] = Color(color.r/4+191, color.g/4+63, color.b/4+31);
+                        else
+                            scanLine[x] = color;
                         //renderer.setPixel(x, y, color);
                     }
                 }
@@ -443,13 +455,13 @@ final class GbcGpu : Mmu8bItf
     {
         if(windowY <= y && windowX-7 < 160)
         {
-            const uint tileMapOffset = (windowMapBaseFlag == 0) ? 0x0000 : 0x0400;
-            const(ubyte)[] tileMap = videoRam[tileMapOffset+0x1800..tileMapOffset+0x1C00];
-            const(ubyte)[] cgbTileMap = videoRam[tileMapOffset+0x3800..tileMapOffset+0x3C00];
+            const uint tileMapOffset = (windowMapBaseFlag == 0) ? 0x1800 : 0x1C00;
+            const(ubyte)[] tileMap = videoRam[tileMapOffset..tileMapOffset+0x0400];
+            const(ubyte)[] cgbTileMap = videoRam[0x2000+tileMapOffset..0x2000+tileMapOffset+0x400];
 
             const uint tileSetOffset = (bgAndWindowTileBaseFlag == 0) ? 0x0800 : 0x0000;
-            const(ubyte)[] tileSet = videoRam[tileSetOffset+0x0000..tileSetOffset+0x1000];
-            const(ubyte)[] cgbTileSet = videoRam[tileSetOffset+0x2000..tileSetOffset+0x3000];
+            const(ubyte)[] tileSet = videoRam[tileSetOffset..tileSetOffset+0x1000];
+            const(ubyte)[] cgbTileSet = videoRam[0x2000+tileSetOffset..0x2000+tileSetOffset+0x1000];
 
             const ubyte tileIdMask = (bgAndWindowTileBaseFlag == 0) ? 0x80 : 0x00;
 
@@ -457,7 +469,7 @@ final class GbcGpu : Mmu8bItf
             const uint yTile = (y - windowY) % 8;
             Color[160] scanLine;
 
-            foreach(uint xMap ; max(windowX-7,0)/8..20)
+            foreach(uint xMap ; 0..(160-(windowX-7)+7)/8)
             {
                 const ubyte tileId = tileMap[yMap * 32 + xMap] ^ tileIdMask;
 
@@ -478,7 +490,7 @@ final class GbcGpu : Mmu8bItf
                     {
                         const int x = xMap * 8 - (windowX-7) + xTile;
 
-                        if(x >= 0)
+                        if(x >= 0 && x < 160)
                         {
                             const uint xTileFinal = (xFlip) ? 7-xTile : xTile;
                             const uint bitPos = 7 - xTileFinal;
@@ -487,8 +499,10 @@ final class GbcGpu : Mmu8bItf
                             const Color color = cgbBgColor(cgbPaletteId, pixel);
 
                             tmpRawLine[x] = pixel;
-                            scanLine[x] = color;
-                            //renderer.setPixel(x, y, color);
+                            static if(tracing)
+                                scanLine[x] = Color(color.r/4+63, color.g/4+191, color.b/4+31);
+                            else
+                                scanLine[x] = color;
                         }
                     }
                 }
@@ -499,9 +513,9 @@ final class GbcGpu : Mmu8bItf
 
                     foreach(uint xTile ; 0..8)
                     {
-                        const int x = xMap * 8 - (windowX-7) + xTile;
+                        const int x = xMap * 8 + (windowX-7) + xTile;
 
-                        if(x >= 0)
+                        if(x >= 0 && x < 160)
                         {
                             const uint bitPos = 7 - xTile;
                             const uint mask = 1 << bitPos;
@@ -509,14 +523,20 @@ final class GbcGpu : Mmu8bItf
                             const Color color = sgbBgColor(pixel);
 
                             tmpRawLine[x] = pixel;
-                            scanLine[x] = color;
-                            //renderer.setPixel(x, y, color);
+                            static if(tracing)
+                                scanLine[x] = Color(color.r/4+63, color.g/4+191, color.b/4+31);
+                            else
+                                scanLine[x] = color;
                         }
                     }
                 }
             }
 
-            renderer.setScanLine(y, scanLine);
+            if(windowX-7 <= 0)
+                renderer.setScanLine(y, scanLine);
+            else
+                foreach(uint x ; windowX-7..160)
+                    renderer.setPixel(x, y, scanLine[x]);
         }
     }
 
@@ -584,8 +604,15 @@ final class GbcGpu : Mmu8bItf
                         x = xPos + xTile - 8;
 
                     if(x >= 0 && x < 160)
+                    {
                         if(pixel != 0 && (!isBehind || tmpRawLine[x] == 0))
-                            renderer.setPixel(x, y, color);
+                        {
+                            static if(tracing)
+                                renderer.setPixel(x, y, Color(color.r/4+31, color.g/4+127, color.b/4+191));
+                            else
+                                renderer.setPixel(x, y, color);
+                        }
+                    }
                 }
             }
         }

@@ -85,9 +85,9 @@ final class Gui : MainWindow
 
         renderArea.setSizeRequest(w*scale, h*scale);
 
-        const int stride = ImageSurface.formatStrideForWidth(CairoFormat.RGB24, w);
+        const int stride = ImageSurface.formatStrideForWidth(CairoFormat.ARGB32, w);
         imageData = new ubyte[stride*h];
-        image = ImageSurface.createForData(imageData.ptr, CairoFormat.RGB24, w, h, stride);
+        image = ImageSurface.createForData(imageData.ptr, CairoFormat.ARGB32, w, h, stride);
 
         if(frameUpdate is null)
             frameUpdate = new Timeout(16u, &frameTimeout);
@@ -107,13 +107,22 @@ final class Gui : MainWindow
         {
             const int w = this.renderer.width();
             const int h = this.renderer.height();
-            const(ubyte)[] srcData = this.renderer.pixels();
+            const(ubyte)[] srcData = this.renderer.frontBuffer();
+            uint[] dstData = cast(uint[])imageData[];
             const int stride = image.getStride;
 
             foreach(int y ; 0..h)
+            {
                 foreach(int x ; 0..w)
-                    foreach(int c ; 0..3)
-                        imageData[y*stride+x*4+c] = srcData[(y*w+x)*3+c];
+                {
+                    //foreach(int c ; 0..3)
+                    //    imageData[y*stride+x*4+2-c] = srcData[(y*w+x)*3+c];
+
+                    const uint srcOffset = (y*w+x)*3;
+                    const uint dstOffset = y*stride/4 + x;
+                    dstData[dstOffset] = 0xFF000000 | (srcData[srcOffset+0]<<16) | (srcData[srcOffset+1]<<8) | srcData[srcOffset+2];
+                }
+            }
 
             ctx.scale(scale, scale);
             ctx.setSourceSurface(image, 0, 0);

@@ -129,14 +129,12 @@ final class GbcMmu : Mmu16bItf
 
                             case 0xFF46:
                                 //writeln("WARNING: DMA used (unstable feature) [romAddr:", value<<8, ", gpuAddr: OAM]");
-                                pragma(msg, "DMA unstable and timing not yet implemented (TODO)");
+                                pragma(msg, "DMA timing not yet implemented (TODO)");
                                 foreach(int i ; 0x00..0xA0)
                                     gpuMmu.saveByte(cast(ushort)(0xFE00 + i), loadByte(cast(ushort)((value << 8) + i)));
                                 break;
 
                             case 0xFF4D:
-                                pragma(msg, "TODO: fully support double speed mode");
-                                writeln("WARNING: the game want to use the double speed mode (not fully supported)");
                                 cpu.doubleSpeedRequest(value);
                                 break;
 
@@ -340,15 +338,11 @@ final class GbcMmu : Mmu16bItf
                                 return 0xFF;
 
                             pragma(msg, "TODO: implement the 0xFF55 port in read mode (GBC DMA status)");
-                            //case 0xFF56:
+                            //case 0xFF55:
                             //    TODO
 
                             //case 0xFF56:
                             //    pragma(msg, "Reading on infrared IO Ports is ignored");
-                            //    return 0x00;
-
-                            //case 0xFF40: .. case 0xFF6F:
-                            //    pragma(msg, "TODO !!!")
                             //    return 0x00;
 
                             case 0xFF70:

@@ -29,7 +29,11 @@ final class GbcCpu : CpuItf
 {
     private:
 
-    static immutable bool tracing = false;
+    version(cpu_tracing)
+        static immutable bool tracing = true;
+    else
+        static immutable bool tracing = false;
+
     immutable bool useCgb;
     Mmu16bItf mmu;
     Register af;
@@ -744,12 +748,13 @@ final class GbcCpu : CpuItf
 
         static if(tracing)
         {
-            writefln("trace/state/af/%0.2X/%0.2X", af.hi, af.lo);
-            writefln("trace/state/bc/%0.2X/%0.2X", bc.hi, bc.lo);
-            writefln("trace/state/de/%0.2X/%0.2X", de.hi, de.lo);
-            writefln("trace/state/hl/%0.2X/%0.2X", hl.hi, hl.lo);
-            writefln("trace/state/pc/%0.4X", pc.all);
-            writefln("trace/state/sp/%0.4X", sp.all);
+            writefln("trace/state/af:%0.2X %0.2X/bc:%0.2X %0.2X/de:%0.2X %0.2X/hl:%0.2X %0.2X/pc:%0.4X/sp:%0.4X", 
+                    af.hi, af.lo, 
+                    bc.hi, bc.lo,
+                    de.hi, de.lo, 
+                    hl.hi, hl.lo, 
+                    pc.all, 
+                    sp.all);
         }
 
         remainingClock = clockTaken - 1;

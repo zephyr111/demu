@@ -7,10 +7,19 @@ final class GbcLcd : RendererItf
 {
     private:
 
-    ubyte[160*144*3] data = 0x80;
+    ubyte[160*144*3] buff1 = 0x80;
+    ubyte[160*144*3] buff2 = 0x80;
+    ubyte[] frontBuff;
+    ubyte[] backBuff;
 
 
     public:
+
+    this()
+    {
+        frontBuff = buff1;
+        backBuff = buff2;
+    }
 
     int width() const
     {
@@ -28,7 +37,7 @@ final class GbcLcd : RendererItf
         assert(y >= 0 && y < 144);
 
         const int offset = (x + 160*y) * 3;
-        return Color(data[offset], data[offset+1], data[offset+2]);
+        return Color(backBuff[offset], backBuff[offset+1], backBuff[offset+2]);
     }
 
     void setPixel(int x, int y, Color color)
@@ -37,9 +46,9 @@ final class GbcLcd : RendererItf
         assert(y >= 0 && y < 144);
 
         const int offset = (x + 160*y) * 3;
-        data[offset+0] = color.r;
-        data[offset+1] = color.g;
-        data[offset+2] = color.b;
+        backBuff[offset+0] = color.r;
+        backBuff[offset+1] = color.g;
+        backBuff[offset+2] = color.b;
     }
 
     const(Color)[] scanLine(int y) const
@@ -51,9 +60,9 @@ final class GbcLcd : RendererItf
 
         foreach(uint x ; 0..160)
         {
-            res[x].r = data[offset+x*3+0];
-            res[x].g = data[offset+x*3+1];
-            res[x].b = data[offset+x*3+2];
+            res[x].r = backBuff[offset+x*3+0];
+            res[x].g = backBuff[offset+x*3+1];
+            res[x].b = backBuff[offset+x*3+2];
         }
 
         return res;
@@ -69,22 +78,40 @@ final class GbcLcd : RendererItf
         static if(Color.sizeof == 3*ubyte.sizeof)
         {
             ubyte* src = cast(ubyte*)scanline.ptr;
-            data[offset..offset+160*3] = src[0..160*3];
+            backBuff[offset..offset+160*3] = src[0..160*3];
         }
         else
         {
             foreach(uint x ; 0..160)
             {
-                data[offset+x*3+0] = scanline[x].r;
-                data[offset+x*3+1] = scanline[x].g;
-                data[offset+x*3+2] = scanline[x].b;
+                backBuff[offset+x*3+0] = scanline[x].r;
+                backBuff[offset+x*3+1] = scanline[x].g;
+                backBuff[offset+x*3+2] = scanline[x].b;
             }
         }
     }
 
-    const(ubyte)[] pixels() const
+    void swapBuffers()
     {
-        return data;
+        /*
+        ubyte[] tmp = backBuff;
+        backBuff = frontBuff;
+        frontBuff = tmp;
+        */
+
+        // Data have to be copied because the next back buffer should contains 
+        // the content of the current back buffer (for incremental drawing)
+        frontBuff[] = backBuff[];
+    }
+
+    const(ubyte)[] backBuffer() const
+    {
+        return backBuff;
+    }
+
+    const(ubyte)[] frontBuffer() const
+    {
+        return frontBuff;
     }
 };
 

@@ -53,6 +53,7 @@ final class GbcTimaTimer : TimaTimerItf
 
     void writeControl(ubyte value)
     {
+        pragma(msg, "TODO: Should internalClock be reset ?");
         mode = value | 0b11111000;
         internalClock = 0;
         freq = frequencies[mode & 0b00000011];

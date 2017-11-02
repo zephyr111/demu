@@ -29,6 +29,39 @@ import mbc5;
 import gui;
 
 
+version(time_tracing)
+{
+    version(X86)
+    {
+        static long getCount()
+        {
+            asm
+            {
+                naked;
+                rdtsc;
+                ret;
+            }
+        }
+    }
+
+    version(X86_64)
+    {
+        static long getCount()
+        {
+            asm
+            {
+                naked;
+                xor RAX, RAX;
+                rdtsc;
+                sal RDX, 32;
+                or RAX, RDX;
+                ret;
+            }
+        }
+    }
+}
+
+
 void usage()
 {
     writeln("usage:");
@@ -130,16 +163,76 @@ void emuThread(string filename)
         StopWatch chrono;
         chrono.start();
 
+        version(time_tracing)
+        {
+            long t[8];
+            long tGlobal[t.length-1] = 0;
+        }
+
         do
         {
+            version(time_tracing)
+                t[0] = getCount();
+
             running = cpu.tick(); // 38%
+
+            version(time_tracing)
+                t[1] = getCount();
+
             gpu.tick(); // 12%
+
+            version(time_tracing)
+                t[2] = getCount();
+
             timaTimer.tick(); // 4%
+
+            version(time_tracing)
+                t[3] = getCount();
+
             dividerTimer.tick(); // 10%
+
+            version(time_tracing)
+                t[4] = getCount();
+
             joystick.tick(); // 4%
+
+            version(time_tracing)
+                t[5] = getCount();
+
             soundController.tick(); // 20% (with clockStep=16)
+
+            version(time_tracing)
+                t[6] = getCount();
+
             serialPort.tick(); // 12%
+
             clock++;
+
+            version(time_tracing)
+            {
+                t[7] = getCount();
+
+                for(int i=0 ; i<tGlobal.length ; ++i)
+                    tGlobal[i] += t[i+1] - t[i];
+
+                // Every syncFrequency Hz
+                if(clock == cpuFrequency)
+                {
+                    long tSum = 0;
+
+                    for(int i=0 ; i<tGlobal.length ; ++i)
+                        tSum += tGlobal[i];
+
+                    writefln("Timings (physical CPU cycles=%d, virtual GB cycles=%d):", tSum, cpuFrequency);
+                    for(int i=0 ; i<tGlobal.length ; ++i)
+                    {
+                        const string tElem = ["cpu", "gpu", "timaTimer", "dividerTimer", "joystick", "soundController", "serialPort"][i];
+                        writefln("    %s=%2.0f%% (cycles=%d)", tElem, tGlobal[i]*100.0/tSum, tGlobal[i]);
+                    }
+
+                    tGlobal[] = 0;
+                }
+            }
 
             // Every syncFrequency Hz
             if(clock % (cpuFrequency / syncFrequency) == 0)

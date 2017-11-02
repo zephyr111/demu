@@ -26,7 +26,7 @@ instructions:
      .byte $1A,$00,$00,2 ; LD   A,(DE)
      .byte $2A,$00,$00,2 ; LD   A,(HL+)
      .byte $3A,$00,$00,2 ; LD   A,(HL-)
-     .byte $F0,<tima_64,$00,3 ; LDH  A,($00)
+     .byte $F0,<tima_64,$00,3 ; LDH  A,($00)       ;C31D ?
      .byte $FA,<tima_64,>tima_64,4 ; LD   A,($0000)
      
      .byte $CB,$46,$00,3 ; BIT  0,(HL)
@@ -44,7 +44,7 @@ main:
      set_test 0
      
      ; Test instructions
-     ld   hl,instructions
+     ld   hl,instructions                   ; C350
 -    call @time_instr
      cp   (hl)
      call nz,@print_failed
