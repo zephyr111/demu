@@ -91,10 +91,13 @@ final class GbcSoundController : Mmu8bItf
 
         // DerelictAL initialization
 
-        DerelictAL.load();
-
         if(!DerelictAL.isLoaded)
-            throw new Exception("Unable to load OpenAL");
+        {
+            DerelictAL.load();
+
+            if(!DerelictAL.isLoaded)
+                throw new Exception("Unable to load OpenAL");
+        }
 
 
         // OpenAL initialization
@@ -600,7 +603,10 @@ writeln("[2] LEN_CLOCKED (TRIGGER ENABLE) to ", channel2_soundLength & 0b0011111
             // Channel 3 Sound on/off
             case 0xFF1A:
                 if((soundEnabled & 0b10000000) != 0)
+                {
                     channel3_soundOnOff = value | 0b01111111;
+                    soundEnabled &= 0b11111011;
+                }
                 break;
 
             // Channel 3 Sound Length

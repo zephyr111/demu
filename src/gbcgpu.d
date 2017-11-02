@@ -35,7 +35,7 @@ final class GbcGpu : Mmu8bItf
     ubyte lcdControl = 0x91;
     ubyte curLine = 0;
     ubyte lyc = 0;
-    ubyte lcdStatus = 0x82; // Not defined
+    ubyte lcdStatus = 0x83;
     ubyte tileMode = 0x00;
     ubyte scrollX = 0x00;
     ubyte scrollY = 0x00;
@@ -50,6 +50,7 @@ final class GbcGpu : Mmu8bItf
     ubyte[0x40] cgbSpritePaletteData = 0xFF; // 64 octets (8 entries x 4 colors x 2 octets per color)
     uint[160] tmpRawLine;
     static immutable ubyte[] sgbPalette = [0xFF, 0xAA, 0x55, 0x00];
+    bool[160] bgPriority;
 
 
     public:
@@ -151,7 +152,7 @@ final class GbcGpu : Mmu8bItf
 
                     case 0xFF41:
                         lcdStatus = (value & 0b01111000) | (lcdStatus & 0b10000111);
-                        pragma(msg, "TODO: See whether setting the LCD status register reset the line counter");
+                        pragma(msg, "TODO: See whether setting the LCD status register reset the line counter (internalClock=0 cause bug on the zilog demo)");
                         break;
 
                     case 0xFF42:
@@ -236,11 +237,6 @@ final class GbcGpu : Mmu8bItf
     {
         internalClock++;
 
-        lcdCoincidenceFlagSetting(curLine == lyc);
-
-        if(curLine == lyc && lcdCoincidenceIntFlag)
-            statInt();
-
         final switch(lcdMode())
         {
             case 0x00:
@@ -290,6 +286,11 @@ final class GbcGpu : Mmu8bItf
                 {
                     internalClock = 0;
                     lcdModeSetting(3);
+
+                    lcdCoincidenceFlagSetting(curLine == lyc);
+
+                    if(curLine == lyc && lcdCoincidenceIntFlag)
+                        statInt();
                 }
                 break;
 
@@ -306,6 +307,9 @@ final class GbcGpu : Mmu8bItf
                     {
                         if(lcdOnFlag)
                         {
+                            if(useCgb)
+                                bgPriority[] = false;
+
                             if(bgOnFlag || useCgb)
                                 renderBgScanline(curLine);
 
@@ -394,7 +398,8 @@ final class GbcGpu : Mmu8bItf
                 const bool xFlip = (cgbTileAttr & 0b00100000) != 0;
                 const bool yFlip = (cgbTileAttr & 0b01000000) != 0;
                 const bool isFront = (cgbTileAttr & 0b10000000) != 0;
-                pragma(msg, "TODO: isFront not implemented");
+                pragma(msg, "TODO: isFront not fully tested");
+
                 const(ubyte)[] tile = (cgbTileBank == 0) ? tileSet[tileId*16..tileId*16+16] : cgbTileSet[tileId*16..tileId*16+16];
                 const uint yTileFinal = (yFlip) ? 7-yTile : yTile;
                 const(ubyte)[] tileLine = tile[yTileFinal*2..yTileFinal*2+2];
@@ -416,6 +421,8 @@ final class GbcGpu : Mmu8bItf
                             scanLine[x] = Color(color.r/4+191, (yFlip) ? color.g/4+127 : color.g/4+63, (xFlip) ? color.b/4+127 : color.b/4+31);
                         else
                             scanLine[x] = color;
+
+                        bgPriority[x] = isFront;
                         //renderer.setPixel(x, y, color);
                     }
                 }
@@ -481,14 +488,15 @@ final class GbcGpu : Mmu8bItf
                     const bool xFlip = (cgbTileAttr & 0b00100000) != 0;
                     const bool yFlip = (cgbTileAttr & 0b01000000) != 0;
                     const bool isFront = (cgbTileAttr & 0b10000000) != 0;
-                    pragma(msg, "TODO: isFront not implemented");
+                    pragma(msg, "TODO: isFront not fully tested");
+
                     const(ubyte)[] tile = (cgbTileBank == 0) ? tileSet[tileId*16..tileId*16+16] : cgbTileSet[tileId*16..tileId*16+16];
                     const uint yTileFinal = (yFlip) ? 7-yTile : yTile;
                     const(ubyte)[] tileLine = tile[yTileFinal*2..yTileFinal*2+2];
 
                     foreach(uint xTile ; 0..8)
                     {
-                        const int x = xMap * 8 - (windowX-7) + xTile;
+                        const int x = xMap * 8 + (windowX-7) + xTile;
 
                         if(x >= 0 && x < 160)
                         {
@@ -497,6 +505,8 @@ final class GbcGpu : Mmu8bItf
                             const uint mask = 1 << bitPos;
                             const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
                             const Color color = cgbBgColor(cgbPaletteId, pixel);
+
+                            bgPriority[x] |= isFront;
 
                             tmpRawLine[x] = pixel;
                             static if(tracing)
@@ -605,7 +615,7 @@ final class GbcGpu : Mmu8bItf
 
                     if(x >= 0 && x < 160)
                     {
-                        if(pixel != 0 && (!isBehind || tmpRawLine[x] == 0))
+                        if(pixel != 0 && (!isBehind && !bgPriority[x] || tmpRawLine[x] == 0))
                         {
                             static if(tracing)
                                 renderer.setPixel(x, y, Color(color.r/4+31, color.g/4+127, color.b/4+191));

@@ -12,6 +12,7 @@ import interfaces.mmu8b;
 
 
 pragma(msg, "TODO: RTC must depend on internal clock (eg. virtual time, not real time) ==> add a tick method");
+pragma(msg, "TODO: support RAM saving to a file");
 final class Mbc3 : Mmu8bItf
 {
     private:
@@ -47,35 +48,41 @@ final class Mbc3 : Mmu8bItf
             case 0xA0: .. case 0xBF:
                 if(ramAndRtcEnabled)
                 {
-                    if(upperBits >= 0x08 && upperBits <= 0x0C)
+                    if(upperBits <= 0x03)
                     {
+                        return ram[(upperBits << 13) | (address - 0xA000)];
+                    }
+                    else if(upperBits >= 0x08 && upperBits <= 0x0C)
+                    {
+                        auto chronoTime = dur!"seconds"(chrono.peek.seconds).split!("days", "hours", "minutes", "seconds");
+
                         switch(upperBits)
                         {
                             case 0x08:
-                                return cast(ubyte)dur!"seconds"(chrono.peek.seconds).seconds;
+                                return cast(ubyte)chronoTime.seconds;
 
                             case 0x09:
-                                return cast(ubyte)dur!"seconds"(chrono.peek.seconds).minutes;
+                                return cast(ubyte)chronoTime.minutes;
 
                             case 0x0A:
-                                return cast(ubyte)dur!"seconds"(chrono.peek.seconds).hours;
+                                return cast(ubyte)chronoTime.hours;
 
                             case 0x0B:
-                                pragma(msg, "TODO: support real time clock with more than 30 days");
-                                return cast(ubyte)dur!"seconds"(chrono.peek.seconds).days;
+                                return cast(ubyte)chronoTime.days;
 
                             case 0x0C:
-                                return (chrono.running) ? 0b00111110 : 0b01111110;
+                                const ubyte dayCarryMask = ((chronoTime.days >> 9) > 0) ? 0b11000001 : 0b01000001;
+                                const ubyte runningMask = (chrono.running) ? 0b10000001 : 0b11000001;
+                                const ubyte dayMsbMask = cast(ubyte)(((chronoTime.days >> 8) & 0b00000001) | 0b11000000);
+                                return dayCarryMask & runningMask & dayMsbMask;
 
                             default:
-                                throw new Exception("RTC not implemented");
+                                throw new Exception(format("Execution failure: Out of memory access (read, address: %0.4X)", address));
                         }
                     }
                     else
                     {
-                        pragma(msg, "TODO: support RAM access (in read mode)");
-                        //writeln("WARNING: reading on cartridge RAM not yet supported");
-                        return ram[(upperBits << 13) | (address - 0xA000)];
+                        throw new Exception(format("Execution failure: Out of memory access (read, address: %0.4X, upperBits: %0.2X)", address, upperBits));
                     }
                 }
                 return 0xFF;
@@ -118,16 +125,56 @@ final class Mbc3 : Mmu8bItf
             case 0xA0: .. case 0xBF:
                 if(ramAndRtcEnabled)
                 {
-                    if(value >= 0x08 && value <= 0x0C)
+                    if(upperBits <= 0x03)
                     {
-                        //
-                        //throw new Exception("RTC not implemented");
+                        ram[(upperBits << 13) | (address - 0xA000)] = value;
+                    }
+                    else if(upperBits >= 0x08 && upperBits <= 0x0C)
+                    {
+                        auto chronoTime = dur!"seconds"(chrono.peek.seconds).split!("days", "hours", "minutes", "seconds");
+
+                        switch(upperBits)
+                        {
+                            case 0x08:
+                                auto newTime = TickDuration.from!"seconds"(chrono.peek.seconds + (value - chronoTime.seconds));
+                                chrono.setMeasured(newTime);
+                                break;
+
+                            case 0x09:
+                                auto newTime = TickDuration.from!"seconds"(chrono.peek.seconds + (value - chronoTime.minutes) * 60);
+                                chrono.setMeasured(newTime);
+                                break;
+
+                            case 0x0A:
+                                auto newTime = TickDuration.from!"seconds"(chrono.peek.seconds + (value - chronoTime.hours) * 3600);
+                                chrono.setMeasured(newTime);
+                                break;
+
+                            case 0x0B:
+                                auto newTime = TickDuration.from!"seconds"(chrono.peek.seconds + (value - chronoTime.days) * 86400);
+                                chrono.setMeasured(newTime);
+                                break;
+
+                            case 0x0C://flags
+                                pragma(msg, "TODO: RTC flag setting not fully implemented (cf carry)");
+                                const ubyte dayCarry = value >> 7;
+                                const bool running = cast(bool)(value & 0b01000000);
+                                const ubyte dayMsb = value & 0b00000001;
+                                auto newTime = TickDuration.from!"seconds"(chrono.peek.seconds + (dayMsb - chronoTime.days/256) * (86400*256));
+                                chrono.setMeasured(newTime);
+                                if(running)
+                                    chrono.start();
+                                else
+                                    chrono.stop();
+                                break;
+
+                            default:
+                                throw new Exception(format("Execution failure: Out of memory access (read, address: %0.4X)", address));
+                        }
                     }
                     else
                     {
-                        pragma(msg, "TODO: support RAM access (in write mode)");
-                        //writeln("WARNING: writting on cartridge RAM is not yet supported");
-                        ram[(upperBits << 13) | (address - 0xA000)] = value;
+                        throw new Exception(format("Execution failure: Out of memory access (write, address: %0.4X, upperBits: %0.2X)", address, upperBits));
                     }
                 }
                 break;

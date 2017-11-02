@@ -128,10 +128,14 @@ final class GbcMmu : Mmu16bItf
                                 break;
 
                             case 0xFF46:
-                                //writeln("WARNING: DMA used (unstable feature) [romAddr:", value<<8, ", gpuAddr: OAM]");
-                                pragma(msg, "DMA timing not yet implemented (TODO)");
-                                foreach(int i ; 0x00..0xA0)
-                                    gpuMmu.saveByte(cast(ushort)(0xFE00 + i), loadByte(cast(ushort)((value << 8) + i)));
+                                if((useCgb || value >= 0x80) && value < 0xE0)
+                                {
+                                    pragma(msg, "DMA timing not yet implemented (TODO)");
+                                    foreach(int i ; 0x00..0xA0)
+                                        gpuMmu.saveByte(cast(ushort)(0xFE00 + i), loadByte(cast(ushort)((value << 8) + i)));
+                                }
+                                else
+                                    writefln("WARNING: writting on a forbidden address (0x%0.4X) using the DMA", value<<8);
                                 break;
 
                             case 0xFF4D:
@@ -170,8 +174,10 @@ final class GbcMmu : Mmu16bItf
                                 if(useCgb)
                                 {
                                     //writeln("WARNING: Advanced DMA used (unstable feature) [romAddr:", value<<8, ", gpuAddr: OAM]");
-                                    pragma(msg, "Advanced DMA unstable and timing not yet implemented (TODO)");
+                                    pragma(msg, "Advanced DMA unstable: horizontal blanking, timing and reset not yet implemented (TODO)");
                                     const bool generalPurposeDma = (value & 0b10000000) == 0;
+                                    if(!generalPurposeDma)
+                                        writefln("WARNING: DMA horizontal blanking not implemented", address-0xFF00);
                                     const uint dataSize = ((value & 0b01111111) + 1) * 16;
                                     foreach(int i ; 0..dataSize)
                                         saveByte(cast(ushort)(dmaDstAddr + i), loadByte(cast(ushort)(dmaSrcAddr + i)));

@@ -2,6 +2,10 @@ module gui;
 
 pragma(msg, "TODO: import useless");
 import std.stdio;
+import std.concurrency;
+import std.string;
+import core.time;
+import core.thread;
 
 import gtk.MainWindow;
 //import gdk.Pixbuf;
@@ -13,12 +17,18 @@ import gtk.VBox;
 import gtk.Main;
 import gtk.Widget;
 import gtk.DrawingArea;
+import gtk.MenuBar;
+import gtk.Menu;
+import gtk.MenuItem;
+import gtk.FileChooserDialog;
+import gtk.FileChooserIF;
 import glib.Timeout;
 import cairo.Context;
 import cairo.ImageSurface;
 
 import interfaces.renderer;
 import interfaces.joystick;
+import gbc;
 
 
 final class Gui : MainWindow
@@ -32,14 +42,14 @@ final class Gui : MainWindow
     ImageSurface image = null;
     int scale;
 
-    // Warning: sould have this scope to be tracked by the GC
+    // Warning: should have this scope to be tracked by the GC
     // (the GC don't see the use of the buffer inside the GTK calls)
     ubyte[] imageData;
 
 
     public:
 
-    this(string name)
+    this(string name, string appParams[])
     {
         super(name);
         setBorderWidth(5);
@@ -50,29 +60,45 @@ final class Gui : MainWindow
         VBox box = new VBox(false, 3);
         box.setSpacing(5);
 
+        auto menuBar = new MenuBar();
+        auto fileMenu = menuBar.append("_File");
+        auto openRomItem = new MenuItem("_Open ROM...");
+        openRomItem.addOnActivate(s => openFile);
+        fileMenu.append(openRomItem);
+        auto closeRomItem = new MenuItem("_Close ROM");
+        closeRomItem.addOnActivate((s) {
+            connectRenderer(null);
+            connectJoystick(null);
+            locate("backend").send("close");
+        });
+        fileMenu.append(closeRomItem);
+        auto quitItem = new MenuItem("_Quit");
+        quitItem.addOnActivate(s => quit);
+        fileMenu.append(quitItem);
+        box.packStart(menuBar, false, false, 0);
+
         renderArea = new DrawingArea();
         renderArea.addOnDraw((Scoped!Context ctx, Widget widget) => update(ctx));
         box.packStart(renderArea, true, true, 0);
-/*
-        Button updateButton = new Button();
-        updateButton.setLabel("Update");
-        updateButton.addOnClicked(s => update);
-        box.packStart(updateButton, false, false, 0);
 
-        Button exitButton = new Button();
-        exitButton.setLabel("Exit");
-        exitButton.addOnClicked(s => Main.quit);
-        box.packStart(exitButton, false, false, 0);
-*/
         add(box);
 
         addOnKeyPress(&keyPressed);
         addOnKeyRelease(&keyReleased);
+        addOnDestroy(s => quit);
+
+        if(appParams.length > 0)
+        {
+            pragma(msg, "TODO: to be implemented");
+        }
+
+        Tid backend = spawnLinked(&emuThread, cast(shared(Gui))this);
+        register("backend", backend);
     }
 
-    this(string name, int width, int height)
+    this(string name, string appParams[], int width, int height)
     {
-        this(name);
+        this(name, appParams);
         setDefaultSize(width, height);
     }
 
@@ -80,17 +106,20 @@ final class Gui : MainWindow
     {
         this.renderer = renderer;
 
-        const int w = this.renderer.width();
-        const int h = this.renderer.height();
+        if(renderer)
+        {
+            const int w = this.renderer.width();
+            const int h = this.renderer.height();
 
-        renderArea.setSizeRequest(w*scale, h*scale);
+            renderArea.setSizeRequest(w*scale, h*scale);
 
-        const int stride = ImageSurface.formatStrideForWidth(CairoFormat.ARGB32, w);
-        imageData = new ubyte[stride*h];
-        image = ImageSurface.createForData(imageData.ptr, CairoFormat.ARGB32, w, h, stride);
+            const int stride = ImageSurface.formatStrideForWidth(CairoFormat.ARGB32, w);
+            imageData = new ubyte[stride*h];
+            image = ImageSurface.createForData(imageData.ptr, CairoFormat.ARGB32, w, h, stride);
 
-        if(frameUpdate is null)
-            frameUpdate = new Timeout(16u, &frameTimeout);
+            if(frameUpdate is null)
+                frameUpdate = new Timeout(16u, &frameTimeout);
+        }
     }
 
     void connectJoystick(JoystickItf joystick)
@@ -100,6 +129,85 @@ final class Gui : MainWindow
 
 
     private:
+
+    static void emuThread(shared(Gui) gui)
+    {
+        try
+        {
+            bool quit = false;
+
+            while(!quit)
+            {
+                string filename;
+
+                while(filename == "" && !quit)
+                {
+                    receive(
+                        (string command) {
+                            string[] commandElems = command.split("|");
+                            if(commandElems[0] == "load")
+                                filename = commandElems[1];
+                            else if(commandElems[0] == "quit")
+                                quit = true;
+                        },
+                    );
+                }
+
+                if(quit)
+                    break;
+
+                bool end = false;
+                auto gbc = new Gbc(filename);
+
+                Gui localGui = cast(Gui)gui;
+                localGui.connectRenderer(gbc.renderer);
+                localGui.connectJoystick(gbc.joystick);
+
+                while(gbc.isRunning() && !end)
+                {
+                    for(int i=0 ; i<4096 ; ++i)
+                    {
+                        gbc.tick();
+                        if(!gbc.isRunning())
+                            break;
+                    }
+
+                    receiveTimeout(
+                        Duration.zero(),
+                        (string command) {
+                            string[] commandElems = command.split("|");
+                            if(commandElems[0] == "close")
+                                end = true;
+                            if(commandElems[0] == "quit")
+                                end = quit = true;
+                        }
+                    );
+                }
+
+                delete gbc;
+            }
+        }
+        catch(Throwable err)
+        {
+            writeln("Emulator thread critical failure: ", err);
+        }
+    }
+
+    void openFile()
+    {
+        auto dialog = new FileChooserDialog("Open ROM file", this, GtkFileChooserAction.OPEN);
+
+        if(dialog.run() == GtkResponseType.OK)
+        {
+            string filename = dialog.getFilename();
+
+            Tid backendTid = locate("backend");
+            backendTid.send("close");
+            backendTid.send("load|" ~ filename);
+        }
+
+        dialog.close();
+    }
 
     bool update(Context ctx)
     {
@@ -138,6 +246,13 @@ final class Gui : MainWindow
         renderArea.queueDraw();
 
         return renderer !is null;
+    }
+
+    void quit()
+    {
+        locate("backend").send("quit");
+        receiveOnly!LinkTerminated();
+        Main.quit();
     }
 
     bool keyPressed(Event event, Widget sender)
@@ -185,7 +300,7 @@ final class Gui : MainWindow
 
         if(event.key.keyval == GdkKeysyms.GDK_Escape)
         {
-            Main.quit();
+            quit();
             return true;
         }
 
