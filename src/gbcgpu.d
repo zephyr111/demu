@@ -554,14 +554,33 @@ final class GbcGpu : Mmu8bItf
     void renderSpriteScanline(uint y)
     {
         const uint tileIdMask = largeSpriteOnFlag ? 0xFE : 0xFF;
-        const(int)[] spriteIds;
 
-        if(useCgb)
-            spriteIds = iota(40).array;
-        else
-            spriteIds = iota(40).array.sort!((a, b) => spriteAttributeTable[a*4+1] < spriteAttributeTable[b*4+1]).array;
+        bool spriteFilter(int i)
+        {
+            const uint yPos = spriteAttributeTable[i*4];
+            return yPos <= y+16 && yPos > y+8 || largeSpriteOnFlag && yPos <= y+8 && yPos > y;
+        }
 
-        foreach_reverse(int i ; spriteIds)
+        bool sgbSpritePriority(int a, int b)
+        {
+            const uint ax = spriteAttributeTable[a*4+1];
+            const uint bx = spriteAttributeTable[b*4+1];
+            const bool aIsBehind = (spriteAttributeTable[a*4 + 3] & 0b10000000) != 0;
+            const bool bIsBehind = (spriteAttributeTable[b*4 + 3] & 0b10000000) != 0;
+
+            if(ax != bx)
+                return ax > bx;
+
+            return a > b;
+        }
+
+        int[] spriteIds = iota(39, -1, -1).filter!spriteFilter.tail(10).array;
+
+        if(!useCgb)
+            spriteIds.sort!sgbSpritePriority();
+
+        // From the lowest priority (background) to the highest priority (foreground)
+        foreach(int i ; spriteIds)
         {
             const uint yPos = spriteAttributeTable[i*4];
             const uint xPos = spriteAttributeTable[i*4 + 1];
@@ -574,54 +593,51 @@ final class GbcGpu : Mmu8bItf
             const bool yFlip = (attr & 0b01000000) != 0;
             const bool isBehind = (attr & 0b10000000) != 0;
 
-            if(yPos <= y+16 && yPos > y+8 || largeSpriteOnFlag && yPos <= y+8 && yPos > y)
+            const uint tilePos = (yPos <= y+8) ? 1 : 0;
+            const uint tileIdOffset = (largeSpriteOnFlag && yFlip) ? 1 - tilePos : tilePos;
+            const uint tileId = (tileIdBase & tileIdMask) | tileIdOffset;
+            const(ubyte)[] tileSet;
+
+            if(useCgb)
+                tileSet = videoRam[0x2000*cgbTileBank..0x2000*cgbTileBank+0x1000];
+            else
+                tileSet = videoRam[0x0000..0x1000];
+            const(ubyte)[] tile = tileSet[tileId*16..tileId*16+16];
+
+            uint yTile = y + 16 - yPos - tilePos*8;
+
+            if(yFlip)
+                yTile = 7 - yTile;
+
+            const(ubyte)[] tileLine = tile[yTile*2..yTile*2+2];
+
+            foreach(uint xTile ; 0..8)
             {
-                const uint tilePos = (yPos <= y+8) ? 1 : 0;
-                const uint tileIdOffset = (largeSpriteOnFlag && yFlip) ? 1 - tilePos : tilePos;
-                const uint tileId = (tileIdBase & tileIdMask) | tileIdOffset;
-                const(ubyte)[] tileSet;
+                const uint bitPos = 7 - xTile;
+                const uint mask = 1 << bitPos;
+                const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
+                Color color;
 
                 if(useCgb)
-                    tileSet = videoRam[0x2000*cgbTileBank..0x2000*cgbTileBank+0x1000];
+                    color = cgbSpriteColor(cgbPaletteId, pixel);
                 else
-                    tileSet = videoRam[0x0000..0x1000];
-                const(ubyte)[] tile = tileSet[tileId*16..tileId*16+16];
+                    color = sgbSpriteColor(sgbPaletteId, pixel);
 
-                uint yTile = y + 16 - yPos - tilePos*8;
+                uint x;
 
-                if(yFlip)
-                    yTile = 7 - yTile;
+                if(xFlip)
+                    x = xPos - xTile - 1;
+                else
+                    x = xPos + xTile - 8;
 
-                const(ubyte)[] tileLine = tile[yTile*2..yTile*2+2];
-
-                foreach(uint xTile ; 0..8)
+                if(x >= 0 && x < 160)
                 {
-                    const uint bitPos = 7 - xTile;
-                    const uint mask = 1 << bitPos;
-                    const uint pixel = ((tileLine[0] & mask) | ((tileLine[1] & mask) << 1)) >> bitPos;
-                    Color color;
-
-                    if(useCgb)
-                        color = cgbSpriteColor(cgbPaletteId, pixel);
-                    else
-                        color = sgbSpriteColor(sgbPaletteId, pixel);
-
-                    uint x;
-
-                    if(xFlip)
-                        x = xPos - xTile - 1;
-                    else
-                        x = xPos + xTile - 8;
-
-                    if(x >= 0 && x < 160)
+                    if(pixel != 0 && (!isBehind && !bgPriority[x] || tmpRawLine[x] == 0))
                     {
-                        if(pixel != 0 && (!isBehind && !bgPriority[x] || tmpRawLine[x] == 0))
-                        {
-                            static if(tracing)
-                                renderer.setPixel(x, y, Color(color.r/4+31, color.g/4+127, color.b/4+191));
-                            else
-                                renderer.setPixel(x, y, color);
-                        }
+                        static if(tracing)
+                            renderer.setPixel(x, y, Color(color.r/4+31, color.g/4+127, color.b/4+191));
+                        else
+                            renderer.setPixel(x, y, color);
                     }
                 }
             }
