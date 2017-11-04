@@ -344,8 +344,14 @@ final class GbcMmu : Mmu16bItf
                                 return 0xFF;
 
                             pragma(msg, "TODO: implement the 0xFF55 port in read mode (GBC DMA status)");
-                            //case 0xFF55:
-                            //    TODO
+                            case 0xFF55:
+                                if(useCgb)
+                                {
+                                    writefln("WARNING: reading on the not fully implemented DMA status port (0x55)", address-0xFF00);
+                                    return 0xFF;
+                                }
+                                writefln("WARNING: reading on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
+                                return 0xFF;
 
                             //case 0xFF56:
                             //    pragma(msg, "Reading on infrared IO Ports is ignored");

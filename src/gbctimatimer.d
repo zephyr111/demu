@@ -56,7 +56,7 @@ final class GbcTimaTimer : TimaTimerItf
         pragma(msg, "TODO: Should internalClock be reset ?");
         mode = value | 0b11111000;
         internalClock = 0;
-        freq = frequencies[mode & 0b00000011];
+        freq = frequencies[value & 0b00000011];
         started = (value & 0b00000100) != 0;
     }
 
