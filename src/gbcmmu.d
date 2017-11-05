@@ -6,8 +6,7 @@ import std.conv;
 
 import interfaces.cpu;
 import interfaces.gpu;
-import interfaces.dividertimer;
-import interfaces.timatimer;
+import interfaces.timer;
 import interfaces.joystick;
 import interfaces.mmu16b;
 import interfaces.mmu8b;
@@ -20,8 +19,7 @@ final class GbcMmu : Mmu16bItf
     Mmu8bItf cartridgeMmu;
     Mmu8bItf gpuMmu;
     Mmu8bItf soundControllerMmu;
-    DividerTimerItf dividerTimer;
-    TimaTimerItf timaTimer;
+    TimerItf timer;
     JoystickItf joystick;
     Mmu8bItf serialPort;
     ubyte[0x8000] workingRam; // 32 Ko (note: 8Ko for pre-GBC console)
@@ -97,19 +95,19 @@ final class GbcMmu : Mmu16bItf
                                 break;
 
                             case 0xFF04:
-                                dividerTimer.writeCounter(value);
+                                timer.writeDividerCounter(value);
                                 break;
 
                             case 0xFF05:
-                                timaTimer.writeCounter(value);
+                                timer.writeTimaCounter(value);
                                 break;
 
                             case 0xFF06:
-                                timaTimer.writeModulo(value);
+                                timer.writeTimaModulo(value);
                                 break;
 
                             case 0xFF07:
-                                timaTimer.writeControl(value);
+                                timer.writeTimaControl(value);
                                 break;
 
                             case 0xFF0F:
@@ -289,16 +287,16 @@ final class GbcMmu : Mmu16bItf
                                 return serialPort.loadByte(address);
 
                             case 0xFF04:
-                                return dividerTimer.readCounter();
+                                return timer.readDividerCounter();
 
                             case 0xFF05:
-                                return timaTimer.readCounter();
+                                return timer.readTimaCounter();
 
                             case 0xFF06:
-                                return timaTimer.readModulo();
+                                return timer.readTimaModulo();
 
                             case 0xFF07:
-                                return timaTimer.readControl();
+                                return timer.readTimaControl();
 
                             case 0xFF0F:
                                 return cpu.requestedInterrupts();
@@ -405,14 +403,9 @@ final class GbcMmu : Mmu16bItf
         this.soundControllerMmu = soundControllerMmu;
     }
 
-    void connectDividerTimer(DividerTimerItf dividerTimer)
+    void connectTimer(TimerItf timer)
     {
-        this.dividerTimer = dividerTimer;
-    }
-
-    void connectTimaTimer(TimaTimerItf timaTimer)
-    {
-        this.timaTimer = timaTimer;
+        this.timer = timer;
     }
 
     void connectJoystick(JoystickItf joystick)

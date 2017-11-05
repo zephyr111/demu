@@ -17,8 +17,7 @@ import gbcgpu;
 import gbcsoundcontroller;
 import gbcmmu;
 import gbclcd;
-import gbcdividertimer;
-import gbctimatimer;
+import gbctimer;
 import gbcjoystick;
 import gbcserialport;
 import nonembc;
@@ -42,8 +41,7 @@ final class Gbc
     GbcGpu gpu;
     GbcMmu mmu;
     GbcSoundController soundController;
-    GbcDividerTimer dividerTimer;
-    GbcTimaTimer timaTimer;
+    GbcTimer timer;
     GbcLcd renderer;
     GbcJoystick joystick;
     GbcSerialPort serialPort;
@@ -54,7 +52,7 @@ final class Gbc
 
     version(time_tracing)
     {
-        long[8] t;
+        long[7] t;
         long[t.length-1] tGlobal = 0;
     }
 
@@ -108,8 +106,7 @@ final class Gbc
         gpu = new GbcGpu(useCgb);
         mmu = new GbcMmu(useCgb);
         soundController = new GbcSoundController(useCgb);
-        dividerTimer = new GbcDividerTimer();
-        timaTimer = new GbcTimaTimer();
+        timer = new GbcTimer();
         renderer = new GbcLcd();
         joystick = new GbcJoystick();
         serialPort = new GbcSerialPort();
@@ -124,12 +121,10 @@ final class Gbc
         mmu.connectCartridgeMmu(cartridgeMmu);
         mmu.connectGpu(gpu);
         mmu.connectSoundController(soundController);
-        mmu.connectDividerTimer(dividerTimer);
-        mmu.connectTimaTimer(timaTimer);
+        mmu.connectTimer(timer);
         mmu.connectJoystick(joystick);
         mmu.connectSerialPort(serialPort);
-        timaTimer.connectCpu(cpu);
-        dividerTimer.connectCpu(cpu);
+        timer.connectCpu(cpu);
         joystick.connectCpu(cpu);
         serialPort.connectCpu(cpu);
 
@@ -154,25 +149,20 @@ final class Gbc
             version(time_tracing)
                 t[2] = getCount();
 
-            timaTimer.tick(); // 4%
+            timer.tick(); // 14%
 
             version(time_tracing)
                 t[3] = getCount();
 
-            dividerTimer.tick(); // 10%
+            joystick.tick(); // 4%
 
             version(time_tracing)
                 t[4] = getCount();
 
-            joystick.tick(); // 4%
-
-            version(time_tracing)
-                t[5] = getCount();
-
             soundController.tick(); // 20% (with clockStep=16)
 
             version(time_tracing)
-                t[6] = getCount();
+                t[5] = getCount();
 
             serialPort.tick(); // 12%
 
@@ -180,7 +170,7 @@ final class Gbc
 
             version(time_tracing)
             {
-                t[7] = getCount();
+                t[6] = getCount();
 
                 for(int i=0 ; i<tGlobal.length ; ++i)
                     tGlobal[i] += t[i+1] - t[i];
@@ -196,7 +186,7 @@ final class Gbc
                     writefln("Timings (physical CPU cycles=%d, virtual GB cycles=%d):", tSum, cpuFrequency);
                     for(int i=0 ; i<tGlobal.length ; ++i)
                     {
-                        const string tElem = ["cpu", "gpu", "timaTimer", "dividerTimer", "joystick", "soundController", "serialPort"][i];
+                        const string tElem = ["cpu", "gpu", "timer", "joystick", "soundController", "serialPort"][i];
                         writefln("    %s=%2.0f%% (cycles=%dM)", tElem, tGlobal[i]*100.0/tSum, tGlobal[i]/1000000);
                     }
 
@@ -217,8 +207,7 @@ final class Gbc
         gpu.destroy();
         soundController.destroy();
         mmu.destroy();
-        dividerTimer.destroy();
-        timaTimer.destroy();
+        timer.destroy();
         renderer.destroy();
         joystick.destroy();
         serialPort.destroy();
