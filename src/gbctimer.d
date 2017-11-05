@@ -18,10 +18,18 @@ final class GbcTimer : TimerItf
     ubyte timaResetVal = 0;
     ushort internalClock = 0;
     int timaOverflowDelay = -1;
+    uint timaShift;
+    uint timaMask;
     CpuItf cpu;
 
 
     public:
+
+    this()
+    {
+        timaShift = timaBitShifts[timaMode & 0b00000011];
+        timaMask = (timaMode & 0b00000100) >> 2;
+    }
 
     ubyte readDividerCounter()
     {
@@ -80,6 +88,9 @@ final class GbcTimer : TimerItf
         // GB/GBC glitch (cf. notes below)
         if(checkTimaIncrement(internalClock, internalClock, oldTimaMode, timaMode))
             incrementTima();
+
+        timaShift = timaBitShifts[timaMode & 0b00000011];
+        timaMask = (timaMode & 0b00000100) >> 2;
     }
 
     void tick()
@@ -92,7 +103,7 @@ final class GbcTimer : TimerItf
             internalClock = (internalClock+1) & 0xFFFF;
 
         // Increment TIMA if necessary
-        if(checkTimaIncrement(oldInternalClock, internalClock, timaMode, timaMode))
+        if(checkTimaIncrement(oldInternalClock, internalClock))
             incrementTima();
 
         // Delay from the previous reset need to implement a GB/GBC glitch (cf. notes below)
@@ -126,6 +137,14 @@ final class GbcTimer : TimerItf
         const uint newBitShift = timaBitShifts[newTimaMode & 0b00000011];
         const bool oldValue = (oldClock >> oldBitShift) & (oldTimaMode>>2) & 0b00000001;
         const bool newValue = (newClock >> newBitShift) & (newTimaMode>>2) & 0b00000001;
+        return oldValue && !newValue;
+    }
+
+    // Alternative faster implementation (used when the mode does not change)
+    bool checkTimaIncrement(uint oldClock, uint newClock)
+    {
+        const bool oldValue = cast(bool)((oldClock >> timaShift) & timaMask);
+        const bool newValue = cast(bool)((newClock >> timaShift) & timaMask);
         return oldValue && !newValue;
     }
 
