@@ -9,22 +9,15 @@ import std.typecons;
 import std.conv;
 import std.uni;
 
-pragma(msg, "DEBUG");
-import std.traits;
-
 import interfaces.cpu;
 import interfaces.mmu16b;
 import cpuregister;
 import reference;
 
 
-// Note : 
-//  - BCD flags not handled
-
-
 pragma(msg, "TODO: support the halt bug");
 pragma(msg, "TODO: support completely the stop instruction");
-pragma(msg, "TODO: fully support the double speed mode (classic DMA should be two time faster, DMA to implement inside the CPU ?");
+pragma(msg, "TODO: fully support the double speed mode (classic DMA should be two time faster, DMA to implement inside the CPU ?)");
 final class GbcCpu : CpuItf
 {
     private:
@@ -47,8 +40,10 @@ final class GbcCpu : CpuItf
     ubyte ieFlag; // Interrupt enable flag
     bool halted;
     bool stopped;
-    int remainingClock = 0; // Number of CPU cycle needed to execute the next instruction
+    int remainingClock; // Number of CPU cycle needed to execute the next instruction
     ubyte doubleSpeedMode;
+    int imeDelay; // Number of CPU macro cycles (cycle x 4) needed to switch the IME flag
+    ubyte nextIme; // Next value for the IME flag (valid only if imeDelay>=0)
 
 
     public:
@@ -71,6 +66,8 @@ final class GbcCpu : CpuItf
         halted = false;
         stopped = false;
         doubleSpeedMode = 0x00;
+        remainingClock = 0;
+        imeDelay = -1;
     }
 
     ubyte doubleSpeedState()
@@ -115,9 +112,6 @@ final class GbcCpu : CpuItf
                 doubleSpeedSwitchFlagSetting(false);
                 remainingClock = 1<<17;
                 stopped = false;
-
-                pragma(msg, "DEBUG");
-                writeln("switch to double speed mode & continue");
             }
 
             if((ifFlag & 0b00010000) != 0)
@@ -126,11 +120,9 @@ final class GbcCpu : CpuItf
                 remainingClock = 1<<17;
                 stopped = false;
 
-                pragma(msg, "DEBUG");
-                writeln("continue");
-
                 pragma(msg, "Disable interrupts here ?");
-                //instruction_di();
+                //imeFlag = 0x00;
+                //imeDelay = -1;
             }
             else
             {
@@ -139,15 +131,10 @@ final class GbcCpu : CpuItf
 
             return true;
         }
-        else if(halted && imeFlag == 0)
+        else if(halted && imeFlag == 0x00)
         {
-            if(ifFlag != 0)
-            {
-                pragma(msg, "DEBUG");
-                writeln("continue");
-
+            if(ifFlag != 0x00)
                 halted = false;
-            }
 
             remainingClock = 4 - 1;
             return true;
@@ -164,14 +151,10 @@ final class GbcCpu : CpuItf
                     {
                         ifFlag &= ~(0x01<<i);
                         remainingClock = 20; // value unspecified
-
-                        pragma(msg, "DEBUG");
-                        if(halted)
-                            writeln("continue");
-
                         halted = false;
-                        pragma(msg, "Disable interrupts here ?");
-                        instruction_di();
+
+                        imeFlag = 0x00;
+                        imeDelay = -1;
                         instruction_rst(0x40 + (i << 3));
 
                         return true;
@@ -746,6 +729,14 @@ final class GbcCpu : CpuItf
                 throw new Exception(format("Unknown instruction (opcode: 0x%0.2X, pc: 0x%0.4X)", instruction, pc.all));
         }
 
+        if(imeDelay >= 0)
+        {
+            imeDelay--;
+
+            if(imeDelay < 0)
+                imeFlag = nextIme;
+        }
+
         static if(tracing)
         {
             writefln("trace/state/af:%0.2X %0.2X/bc:%0.2X %0.2X/de:%0.2X %0.2X/hl:%0.2X %0.2X/pc:%0.4X/sp:%0.4X", 
@@ -1093,30 +1084,40 @@ final class GbcCpu : CpuItf
 
     void instruction_ei()
     {
-        imeFlag = 0xFF;
+        if(imeDelay >= 0)
+        {
+            if(nextIme == 0x00)
+                imeDelay = -1;
+        }
+        else if(imeFlag == 0x00)
+        {
+            imeDelay = 1;
+            nextIme = 0xFF;
+        }
     }
 
     void instruction_di()
     {
-        imeFlag = 0x00;
+        if(imeDelay >= 0)
+        {
+            if(nextIme == 0xFF)
+                imeDelay = -1;
+        }
+        else if(imeFlag == 0xFF)
+        {
+            imeDelay = 1;
+            nextIme = 0x00;
+        }
     }
 
     void instruction_halt()
     {
-        pragma(msg, "TODO: to check");
-        //instruction_ei();
         halted = true;
-        pragma(msg, "DEBUG");
-        writeln("halted");
     }
 
     void instruction_stop()
     {
-        pragma(msg, "TODO: to check");
-        //instruction_ei();
         stopped = true;
-        pragma(msg, "DEBUG");
-        writeln("stopped");
     }
 
     void instruction_call(T)(T op)
@@ -1187,8 +1188,9 @@ final class GbcCpu : CpuItf
 
     void instruction_reti()
     {
-        instruction_ei();
         instruction_ret();
+        imeFlag = 0xFF;
+        imeDelay = -1;
     }
 
     void instruction_push(T)(T op)
@@ -1316,7 +1318,7 @@ final class GbcCpu : CpuItf
 
     ubyte requestedInterrupts()
     {
-        return ifFlag;
+        return ifFlag | 0xE0;
     }
 
     void enableInterrupts(ubyte value)
@@ -1326,7 +1328,7 @@ final class GbcCpu : CpuItf
 
     ubyte enabledInterrupts()
     {
-        return ieFlag;
+        return ieFlag | 0xE0;
     }
 
     void connectMmu(Mmu16bItf mmu)
