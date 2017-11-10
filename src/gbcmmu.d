@@ -3,6 +3,7 @@ module gbcmmu;
 import std.stdio;
 import std.string;
 import std.conv;
+import std.range;
 
 import interfaces.cpu;
 import interfaces.gpu;
@@ -25,8 +26,10 @@ final class GbcMmu : Mmu16bItf
     ubyte[0x8000] workingRam; // 32 Ko (note: 8Ko for pre-GBC console)
     ubyte[0x80] highRam; // 128 octets
     ubyte workingRamBank = 1;
-    ushort dmaSrcAddr = 0x0000; // undefined
-    ushort dmaDstAddr = 0x0000; // undefined
+    ushort admaSrcAddr = 0x0000; // undefined
+    ushort admaDstAddr = 0x0000; // undefined
+    short dmaProgress = -1;
+    ushort dmaDstAddr = 0x0000;
 
 
     public:
@@ -38,6 +41,13 @@ final class GbcMmu : Mmu16bItf
 
     void saveByte(ushort address, ubyte value)
     {
+        pragma(msg, "Memory access forbidden during DMA");
+        //if(dmaProgress >= 8 && (address < 0xFF80 || address > 0xFFFE))
+        //{
+        //    writefln("out: dmaProgress=%d, address=%4X [save]", dmaProgress, address);
+        //    return;
+        //}
+
         switch(address >> 8)
         {
             // Cartridge ROM+RAM
@@ -126,12 +136,9 @@ final class GbcMmu : Mmu16bItf
                                 break;
 
                             case 0xFF46:
+                                pragma(msg, "Value ok up to 0xF1 or 0xE0 ?");
                                 if((useCgb || value >= 0x80) && value < 0xE0)
-                                {
-                                    pragma(msg, "DMA timing not yet implemented (TODO)");
-                                    foreach(int i ; 0x00..0xA0)
-                                        gpuMmu.saveByte(cast(ushort)(0xFE00 + i), loadByte(cast(ushort)((value << 8) + i)));
-                                }
+                                    dmaProgress = 0, dmaDstAddr = value << 8;
                                 else
                                     writefln("WARNING: writting on a forbidden address (0x%0.4X) using the DMA", value<<8);
                                 break;
@@ -142,28 +149,28 @@ final class GbcMmu : Mmu16bItf
 
                             case 0xFF51:
                                 if(useCgb)
-                                    dmaSrcAddr = (value << 8) | (dmaSrcAddr & 0x00FF);
+                                    admaSrcAddr = (value << 8) | (admaSrcAddr & 0x00FF);
                                 else
                                     writefln("WARNING: writting on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
                                 break;
 
                             case 0xFF52:
                                 if(useCgb)
-                                    dmaSrcAddr = (dmaSrcAddr & 0xFF00) | value;
+                                    admaSrcAddr = (admaSrcAddr & 0xFF00) | value;
                                 else
                                     writefln("WARNING: writting on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
                                 break;
 
                             case 0xFF53:
                                 if(useCgb)
-                                    dmaDstAddr = (value << 8) | (dmaDstAddr & 0x00FF);
+                                    admaDstAddr = (value << 8) | (admaDstAddr & 0x00FF);
                                 else
                                     writefln("WARNING: writting on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
                                 break;
 
                             case 0xFF54:
                                 if(useCgb)
-                                    dmaDstAddr = (dmaDstAddr & 0xFF00) | value;
+                                    admaDstAddr = (admaDstAddr & 0xFF00) | value;
                                 else
                                     writefln("WARNING: writting on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
                                 break;
@@ -178,7 +185,7 @@ final class GbcMmu : Mmu16bItf
                                         writefln("WARNING: DMA horizontal blanking not implemented", address-0xFF00);
                                     const uint dataSize = ((value & 0b01111111) + 1) * 16;
                                     foreach(int i ; 0..dataSize)
-                                        saveByte(cast(ushort)(dmaDstAddr + i), loadByte(cast(ushort)(dmaSrcAddr + i)));
+                                        saveByte(cast(ushort)(admaDstAddr + i), loadByte(cast(ushort)(admaSrcAddr + i)));
                                 }
                                 else
                                     writefln("WARNING: writting on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
@@ -238,6 +245,13 @@ final class GbcMmu : Mmu16bItf
 
     ubyte loadByte(ushort address)
     {
+        pragma(msg, "Memory access forbidden during DMA");
+        //if(dmaProgress >= 0 && (address < 0xFF80 || address > 0xFFFE))
+        //{
+        //    writefln("out: dmaProgress=%d, address=%4X [load]", dmaProgress, address);
+        //    return 0xFF;
+        //}
+
         switch(address >> 8)
         {
             // Cartridge ROM+RAM
@@ -316,28 +330,28 @@ final class GbcMmu : Mmu16bItf
                             pragma(msg, "TODO: check if DMA infos can be read");
                             case 0xFF51:
                                 if(useCgb)
-                                    return dmaSrcAddr >> 8;
+                                    return admaSrcAddr >> 8;
                                 writefln("WARNING: reading on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
                                 return 0xFF;
 
                             pragma(msg, "TODO: check if DMA infos can be read");
                             case 0xFF52:
                                 if(useCgb)
-                                    return dmaSrcAddr & 0x00FF;
+                                    return admaSrcAddr & 0x00FF;
                                 writefln("WARNING: reading on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
                                 return 0xFF;
 
                             pragma(msg, "TODO: check if DMA infos can be read");
                             case 0xFF53:
                                 if(useCgb)
-                                    return dmaDstAddr >> 8;
+                                    return admaDstAddr >> 8;
                                 writefln("WARNING: reading on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
                                 return 0xFF;
 
                             pragma(msg, "TODO: check if DMA infos can be read");
                             case 0xFF54:
                                 if(useCgb)
-                                    return dmaDstAddr & 0x00FF;
+                                    return admaDstAddr & 0x00FF;
                                 writefln("WARNING: reading on a CGB only port (0x%0.2X) using the SGB mode", address-0xFF00);
                                 return 0xFF;
 
@@ -386,6 +400,28 @@ final class GbcMmu : Mmu16bItf
     ushort loadWord(ushort address)
     {
         return loadByte(address++) | (loadByte(address) << 8);
+    }
+
+    void tick()
+    {
+        pragma(msg, "Write only during V-Blank period");
+        if(dmaProgress >= 0)
+        {
+            // Double speed mode
+            if((cpu.doubleSpeedState() & 0b10000000) != 0)
+                dmaProgress += 2;
+            else
+                dmaProgress++;
+
+            // 160 us (80 in double speed mode)
+            if(dmaProgress > 671)
+            {
+                for(ushort offset=0 ; offset<0xA0 ; ++offset)
+                    gpuMmu.saveByte(0xFE00 | offset, loadByte(dmaDstAddr | offset));
+
+                dmaProgress = -1;
+            }
+        }
     }
 
     void connectCpu(CpuItf cpu)

@@ -52,7 +52,7 @@ final class Gbc
 
     version(time_tracing)
     {
-        long[7] t;
+        long[8] t;
         long[t.length-1] tGlobal = 0;
     }
 
@@ -139,32 +139,37 @@ final class Gbc
             version(time_tracing)
                 t[0] = getCount();
 
-            running = cpu.tick(); // 38%
+            running = cpu.tick();
 
             version(time_tracing)
                 t[1] = getCount();
 
-            gpu.tick(); // 12%
+            gpu.tick();
 
             version(time_tracing)
                 t[2] = getCount();
 
-            timer.tick(); // 14%
+            mmu.tick();
 
             version(time_tracing)
                 t[3] = getCount();
 
-            joystick.tick(); // 4%
+            timer.tick();
 
             version(time_tracing)
                 t[4] = getCount();
 
-            soundController.tick(); // 20% (with clockStep=16)
+            joystick.tick();
 
             version(time_tracing)
                 t[5] = getCount();
 
-            serialPort.tick(); // 12%
+            soundController.tick();
+
+            version(time_tracing)
+                t[6] = getCount();
+
+            serialPort.tick();
 
             clock++;
 
@@ -186,7 +191,7 @@ final class Gbc
                     writefln("Timings (physical CPU cycles=%d, virtual GB cycles=%d):", tSum, cpuFrequency);
                     for(int i=0 ; i<tGlobal.length ; ++i)
                     {
-                        const string tElem = ["cpu", "gpu", "timer", "joystick", "soundController", "serialPort"][i];
+                        const string tElem = ["cpu", "gpu", "mmu", "timer", "joystick", "soundController", "serialPort"][i];
                         writefln("    %s=%2.0f%% (cycles=%dM)", tElem, tGlobal[i]*100.0/tSum, tGlobal[i]/1000000);
                     }
 
