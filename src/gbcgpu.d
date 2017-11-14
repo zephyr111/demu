@@ -51,6 +51,7 @@ final class GbcGpu : Mmu8bItf
     uint[160] tmpRawLine;
     static immutable ubyte[] sgbPalette = [0xFF, 0xAA, 0x55, 0x00];
     bool[160] bgPriority;
+    bool oldStatIrq = false; // Required for a valid interrupt handling
 
 
     public:
@@ -65,12 +66,18 @@ final class GbcGpu : Mmu8bItf
         switch(address >> 8)
         {
             case 0x80: .. case 0x9F:
+                // Check with the Pokemon silver ROM
+                pragma(msg, "TODO: CPU should not access to VRAM in mode 3, but enabling that causes visual glitches (check DMA)");
+                //if(lcdMode() == 0x03)
+                //    return 0xFF;
                 return videoRam[(ramBank << 13) | (address - 0x8000)];
 
             case 0xFE: .. case 0xFF:
                 switch(address)
                 {
                     case 0xFE00: .. case 0xFE9F:
+                        if(lcdMode() == 0x02 || lcdMode() == 0x03)
+                            return 0xFF;
                         return spriteAttributeTable[address - 0xFE00];
 
                     case 0xFF40:
@@ -113,12 +120,16 @@ final class GbcGpu : Mmu8bItf
                         return cgbBgPaletteId;
 
                     case 0xFF69:
+                        if(lcdMode() == 0x03)
+                            return 0xFF;
                         return cgbBgPaletteData[cgbBgPaletteId & 0x3F];
 
                     case 0xFF6A:
                         return cgbSpritePaletteId;
 
                     case 0xFF6B:
+                        if(lcdMode() == 0x03)
+                            return 0xFF;
                         return cgbSpritePaletteData[cgbBgPaletteId & 0x3F];
 
                     default:
@@ -136,6 +147,10 @@ final class GbcGpu : Mmu8bItf
         switch(address >> 8)
         {
             case 0x80: .. case 0x9F:
+                // Check with mooneye GPU tests
+                pragma(msg, "TODO: CPU should not access to VRAM in mode 3, but enabling that causes visual glitches (check DMA)");
+                //if(lcdMode() == 0x03)
+                //    break;
                 videoRam[(ramBank << 13) | (address - 0x8000)] = value;
                 break;
 
@@ -143,6 +158,10 @@ final class GbcGpu : Mmu8bItf
                 switch(address)
                 {
                     case 0xFE00: .. case 0xFE9F:
+                        // Check with mooneye GPU tests
+                        pragma(msg, "TODO: CPU should not access to OAM in mode 3, but enabling that causes visual glitches (check DMA)");
+                        //if(lcdMode() == 0x02 || lcdMode() == 0x03)
+                        //    break;
                         spriteAttributeTable[address - 0xFE00] = value;
                         break;
 
@@ -199,6 +218,10 @@ final class GbcGpu : Mmu8bItf
                         break;
 
                     case 0xFF69:
+                        // Check with Megaman Xtreme
+                        pragma(msg, "TODO: CPU should not access to CGB palette in mode 3, but enabling that causes visual glitches (check DMA)");
+                        //if(lcdMode() == 0x03)
+                        //    break;
                         const ubyte id = cgbBgPaletteId & 0x3F;
                         cgbBgPaletteData[id] = value;
                         if((cgbBgPaletteId & 0x80) != 0)
@@ -211,6 +234,10 @@ final class GbcGpu : Mmu8bItf
                         break;
 
                     case 0xFF6B:
+                        // Check with Megaman Xtreme
+                        pragma(msg, "TODO: CPU should not access to CGB palette in mode 3, but enabling that causes visual glitches (check DMA)");
+                        //if(lcdMode() == 0x03)
+                        //    break;
                         const ubyte id = cgbSpritePaletteId & 0x3F;
                         cgbSpritePaletteData[id] = value;
                         if((cgbSpritePaletteId & 0x80) != 0)
@@ -237,9 +264,17 @@ final class GbcGpu : Mmu8bItf
     {
         internalClock++;
 
+        // More information at https://board.byuu.org/viewtopic.php?f=8&t=1120
+        pragma(msg, "TODO: improve performance of interrupt handling by updating IRQ only when needed");
+
+        bool newStatIrq = false;
+
         final switch(lcdMode())
         {
+            // During H-Blank
             case 0x00:
+                newStatIrq |= lcdHblankIntFlag;
+
                 if(internalClock >= 204)
                 {
                     internalClock = 0;
@@ -248,9 +283,6 @@ final class GbcGpu : Mmu8bItf
                     if(curLine == 144)
                     {
                         lcdModeSetting(1);
-
-                        if(lcdVblankIntFlag)
-                            statInt();
 
                         vSyncInt();
                         renderer.swapBuffers();
@@ -261,7 +293,10 @@ final class GbcGpu : Mmu8bItf
                 }
                 break;
 
+            // During V-Blank
             case 0x01:
+                newStatIrq |= lcdVblankIntFlag;
+
                 if(internalClock >= 456)
                 {
                     internalClock = 0;
@@ -271,9 +306,6 @@ final class GbcGpu : Mmu8bItf
                     {
                         lcdModeSetting(2);
 
-                        if(lcdOamIntFlag)
-                            statInt();
-
                         curLine = 0;
                         //vSyncInt();
                         pragma(msg, "TODO: vsync here ? (no)");
@@ -281,27 +313,23 @@ final class GbcGpu : Mmu8bItf
                 }
                 break;
 
+            // During OAM-RAM searching
             case 0x02:
+                newStatIrq |= lcdOamIntFlag;
+
                 if(internalClock >= 80)
                 {
                     internalClock = 0;
                     lcdModeSetting(3);
-
-                    lcdCoincidenceFlagSetting(curLine == lyc);
-
-                    if(curLine == lyc && lcdCoincidenceIntFlag)
-                        statInt();
                 }
                 break;
 
+            // During data transfer to LCD driver
             case 0x03:
                 if(internalClock >= 172)
                 {
                     internalClock = 0;
                     lcdModeSetting(0);
-
-                    if(lcdHblankIntFlag)
-                        statInt();
 
                     if(curLine < 144)
                     {
@@ -323,6 +351,14 @@ final class GbcGpu : Mmu8bItf
                 }
                 break;
         }
+
+        lcdCoincidenceFlagSetting(curLine == lyc);
+        newStatIrq |= lcdCoincidenceIntFlag && curLine == lyc;
+
+        if(!oldStatIrq && newStatIrq)
+            statInt();
+
+        oldStatIrq = newStatIrq;
     }
 
     void connectCpu(CpuItf cpu)
@@ -653,6 +689,11 @@ final class GbcGpu : Mmu8bItf
     void statInt()
     {
         cpu.addInterruptRequests(0b00000010);
+    }
+
+    bool isStatRequested()
+    {
+        return (cpu.requestedInterrupts() & 0b00000010) != 0;
     }
 
     // Determine if the LCD screen is switched on
