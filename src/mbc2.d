@@ -2,6 +2,7 @@ module mbc2;
 
 import std.stdio;
 import std.algorithm.comparison;
+import std.algorithm.searching;
 import std.format;
 
 import interfaces.cartridgedata;
@@ -16,6 +17,7 @@ final class Mbc2 : Mmu8bItf
     bool ramEnabled = false;
     uint romBank = 1;
     ubyte[512] ram = 0xFF; // Only the lower 4 bits of the bytes are used
+    uint romAddressMask = 0x00000000;
 
 
     public:
@@ -28,7 +30,7 @@ final class Mbc2 : Mmu8bItf
                 return cartridge.rawContent[address];
 
             case 0x40: .. case 0x7F:
-                return cartridge.rawContent[(romBank << 14) | (address - 0x4000)];
+                return cartridge.rawContent[((romBank << 14) | (address - 0x4000)) & romAddressMask];
 
             case 0xA0: .. case 0xA1:
                 if(ramEnabled)
@@ -71,7 +73,17 @@ final class Mbc2 : Mmu8bItf
 
     void connectCartridgeData(CartridgeDataItf cartridge)
     {
+        static immutable int[] availableRomSizes = [65536, 131072, 262144];
+
         this.cartridge = cartridge;
+
+        if(!availableRomSizes.canFind(cartridge.romSize()))
+            throw new Exception("Bad GB file: mismatch between the ROM size and the controller (MBC2)");
+
+        if(cartridge.ramSize() != 2048)
+            throw new Exception("Bad GB file: mismatch between the RAM size and the controller (MBC2)");
+
+        romAddressMask = cartridge.romSize() - 1;
     }
 
     static CartridgeMmuType type()

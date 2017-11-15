@@ -3,6 +3,7 @@ module mbc3;
 pragma(msg, "TODO: import useless");
 import std.stdio;
 import std.algorithm.comparison;
+import std.algorithm.searching;
 import std.datetime;
 import std.format;
 import core.time;
@@ -24,6 +25,8 @@ final class Mbc3 : Mmu8bItf
     ubyte[32*1024] ram = 0xFF;
     ubyte lastRtcWrite = 0xFF;
     StopWatch chrono;
+    uint romAddressMask = 0x00000000;
+    uint ramAddressMask = 0x00000000;
 
 
     public:
@@ -43,14 +46,14 @@ final class Mbc3 : Mmu8bItf
                 return cartridge.rawContent[address];
 
             case 0x40: .. case 0x7F:
-                return cartridge.rawContent[(romBank << 14) | (address - 0x4000)];
+                return cartridge.rawContent[((romBank << 14) | (address - 0x4000)) & romAddressMask];
 
             case 0xA0: .. case 0xBF:
                 if(ramAndRtcEnabled)
                 {
                     if(upperBits <= 0x03)
                     {
-                        return ram[(upperBits << 13) | (address - 0xA000)];
+                        return ram[((upperBits << 13) | (address - 0xA000)) & ramAddressMask];
                     }
                     else if(upperBits >= 0x08 && upperBits <= 0x0C)
                     {
@@ -127,7 +130,7 @@ final class Mbc3 : Mmu8bItf
                 {
                     if(upperBits <= 0x03)
                     {
-                        ram[(upperBits << 13) | (address - 0xA000)] = value;
+                        ram[((upperBits << 13) | (address - 0xA000)) & ramAddressMask] = value;
                     }
                     else if(upperBits >= 0x08 && upperBits <= 0x0C)
                     {
@@ -186,7 +189,19 @@ final class Mbc3 : Mmu8bItf
 
     void connectCartridgeData(CartridgeDataItf cartridge)
     {
+        static immutable int[] availableRomSizes = [65536, 131072, 262144, 524288, 1048576, 2097152];
+        static immutable int[] availableRamSizes = [2048, 8192, 32768];
+
         this.cartridge = cartridge;
+
+        if(!availableRomSizes.canFind(cartridge.romSize()))
+            throw new Exception("Bad GB file: mismatch between the ROM size and the controller (MBC3)");
+
+        if(!availableRamSizes.canFind(cartridge.ramSize()))
+            throw new Exception("Bad GB file: mismatch between the RAM size and the controller (MBC3)");
+
+        romAddressMask = cartridge.romSize() - 1;
+        ramAddressMask = cartridge.ramSize() - 1;
     }
 
     static CartridgeMmuType type()

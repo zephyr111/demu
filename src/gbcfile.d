@@ -140,9 +140,9 @@ final class GbcFile : CartridgeDataItf
 
     uint romSize() const
     {
-        const uint bankSize = 16 << 10;
+        immutable uint bankSize = 16 * 1024;
 
-        if(header.romSize <= 0x07)
+        if(header.romSize <= 0x08)
             return (2 << header.romSize) * bankSize;
 
         return [72, 80, 96][header.romSize - 0x52] * bankSize;
@@ -150,8 +150,8 @@ final class GbcFile : CartridgeDataItf
 
     uint ramSize() const
     {
-        // Guess the check is already done
-        return ((1 << (cast(uint)(header.ramSize) << 1)) >> 1) << 10;
+        // Note: guess the check is already done
+        return [0, 2, 8, 32, 128, 64][header.ramSize] * 1024;
     }
 
     bool japaneseVersion() const
@@ -206,10 +206,10 @@ final class GbcFile : CartridgeDataItf
         if(header.sgbFlag != 0x00 && header.sgbFlag != 0x03)
             throw new Exception("Bad GB file: unknown SGB flag");
 
-        if((header.romSize > 0x07 && header.romSize < 0x52) || header.romSize > 0x54)
+        if((header.romSize > 0x08 && header.romSize < 0x52) || header.romSize > 0x54)
             throw new Exception("Bad GB file: unknown ROM size");
 
-        if(header.ramSize > 0x03)
+        if(header.ramSize > 0x05)
             throw new Exception("Bad GB file: unknown RAM size");
 
         if(header.destinationCode > 0x01)

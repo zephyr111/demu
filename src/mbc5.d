@@ -2,6 +2,7 @@ module mbc5;
 
 import std.stdio;
 import std.format;
+import std.algorithm.searching;
 
 import interfaces.cartridgedata;
 import interfaces.mmu8b;
@@ -17,6 +18,8 @@ final class Mbc5 : Mmu8bItf
     uint romBank = 1;
     uint upperBits = 0;
     ubyte[128*1024] ram = 0xFF;
+    uint romAddressMask = 0x00000000;
+    uint ramAddressMask = 0x00000000;
 
 
     public:
@@ -29,11 +32,11 @@ final class Mbc5 : Mmu8bItf
                 return cartridge.rawContent[address];
 
             case 0x40: .. case 0x7F:
-                return cartridge.rawContent[(romBank << 14) | (address - 0x4000)];
+                return cartridge.rawContent[((romBank << 14) | (address - 0x4000)) & romAddressMask];
 
             case 0xA0: .. case 0xBF:
                 if(ramEnabled)
-                    return ram[(upperBits << 13) | (address - 0xA000)];
+                    return ram[((upperBits << 13) | (address - 0xA000)) & ramAddressMask];
                 return 0xFF;
 
             default:
@@ -63,7 +66,7 @@ final class Mbc5 : Mmu8bItf
 
             case 0xA0: .. case 0xBF:
                 if(ramEnabled)
-                    ram[(upperBits << 13) | (address - 0xA000)] = value;
+                    ram[((upperBits << 13) | (address - 0xA000)) & ramAddressMask] = value;
                 break;
 
             default:
@@ -73,7 +76,19 @@ final class Mbc5 : Mmu8bItf
 
     void connectCartridgeData(CartridgeDataItf cartridge)
     {
+        static immutable int[] availableRomSizes = [65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608];
+        static immutable int[] availableRamSizes = [8192, 32768, 131072];
+
         this.cartridge = cartridge;
+
+        if(!availableRomSizes.canFind(cartridge.romSize()))
+            throw new Exception("Bad GB file: mismatch between the ROM size and the controller (MBC5)");
+
+        if(!availableRamSizes.canFind(cartridge.ramSize()))
+            throw new Exception("Bad GB file: mismatch between the RAM size and the controller (MBC5)");
+
+        romAddressMask = cartridge.romSize() - 1;
+        ramAddressMask = cartridge.ramSize() - 1;
     }
 
     static CartridgeMmuType type()
