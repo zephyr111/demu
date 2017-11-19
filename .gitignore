@@ -2,5 +2,12 @@ infos/
 lib/derelict
 lib/GtkD
 roms/games
+
+.dub
+docs.json
+__dummy.html
 *.o
+*.obj
+__test__*__
 bin/gba
+

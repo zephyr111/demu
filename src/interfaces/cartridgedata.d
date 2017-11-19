@@ -1,4 +1,4 @@
-module cartridgedata;
+module interfaces.cartridgedata;
 
 
 enum CartridgeMmuType

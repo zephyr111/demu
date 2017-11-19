@@ -1,4 +1,4 @@
-module gcblcd;
+module gbclcd;
 
 import interfaces.renderer;
 

@@ -1,4 +1,4 @@
-module renderer;
+module interfaces.renderer;
 
 
 struct Color

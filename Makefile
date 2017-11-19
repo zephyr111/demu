@@ -1,6 +1,6 @@
 SRC_DIR = src
 BIN_DIR = bin
-TARGET = gba
+TARGET = gbc
 
 # Choose automatically the compiler if not specified
 ifndef DC
@@ -13,11 +13,13 @@ endif
 
 # Select the options according to the compiler
 ifeq ($(DC),ldc2)
+    # PGO buggy with LDC2 or not implemented ?
     OPT_LTO=-flto=full -flto-binary=/usr/lib/llvm-5.0/lib/LLVMgold.so
-    OPT_DFLAGS=$(OPT_LTO) -O3 -ffast-math -release -mcpu=native
-    OPT_LDFLAGS=$(OPT_LTO) -O3 -ffast-math -release
+    OPT_CACHE=-cache=/tmp/ldccache -cache-prune
+    OPT_DFLAGS=$(OPT_LTO) $(OPT_CACHE) -O3 -ffast-math -release -mcpu=native
+    OPT_LDFLAGS=$(OPT_LTO) $(OPT_CACHE) -O3 -ffast-math -release
 else
-	# LTO buggy with gcc 7 or not implemented ?
+    # LTO buggy with gcc 7 or not implemented ?
     OPT_LTO=#-flto=full
     OPT_DFLAGS=$(OPT_LTO) -O3 -ffast-math -s -frelease -march=native
     OPT_LDFLAGS=$(OPT_LTO) -O3 -ffast-math -frelease

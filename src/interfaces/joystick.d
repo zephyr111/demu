@@ -1,4 +1,4 @@
-module joystick;
+module interfaces.joystick;
 
 
 interface JoystickItf

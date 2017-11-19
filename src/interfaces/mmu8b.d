@@ -1,4 +1,4 @@
-module mmu8b;
+module interfaces.mmu8b;
 
 
 interface Mmu8bItf

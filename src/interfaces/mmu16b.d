@@ -1,4 +1,4 @@
-module mmu16b;
+module interfaces.mmu16b;
 
 
 interface Mmu16bItf

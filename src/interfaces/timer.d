@@ -1,4 +1,4 @@
-module timer;
+module interfaces.timer;
 
 
 interface TimerItf

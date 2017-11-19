@@ -378,7 +378,7 @@ final class GbcMmu : Mmu16bItf
                             default:
                                 throw new Exception(format("Execution failure: IO Ports access not implemented (port: 0x%0.2X, mode:read)", address-0xFF00));
                         }
-                        throw new Exception(format("Programming error: bad address (%0.4X)", address));
+                        //throw new Exception(format("Programming error: bad address (%0.4X)", address));
 
                     // High RAM
                     case 0xFF80: .. case 0xFFFE:

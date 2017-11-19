@@ -1,4 +1,4 @@
-module gpu;
+module interfaces.gpu;
 
 
 interface GpuItf

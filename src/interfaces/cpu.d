@@ -1,4 +1,4 @@
-module cpu;
+module interfaces.cpu;
 
 
 interface CpuItf
