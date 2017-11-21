@@ -16,5 +16,5 @@
     },
 
     "description": "A Game Boy emulator written in D.",
-    "license": "Mozilla Public License Version 2.0",
+    "license": "MPL-2.0",
 }
