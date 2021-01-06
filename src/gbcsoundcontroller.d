@@ -1212,7 +1212,7 @@ writeln("[4] LEN_CLOCKED (TICK) to ", channel4_soundLength & 0b00111111);
                 const SoundValue soundValueChan3 = tickChannel3();
                 const SoundValue soundValueChan4 = tickChannel4();
 
-                const float soundAmplitude = cast(float)(max(-short.min/2, short.max/2) - 1);
+                const float soundAmplitude = cast(float)(min(-(short.min/2), short.max/2));
                 const SoundValue soundValue = normalize(mixSound([soundValueChan1, soundValueChan2, soundValueChan3, soundValueChan4]));
                 bufferLeftSoundValue = cast(short)(soundValue.left * soundAmplitude);
                 bufferRightSoundValue = cast(short)(soundValue.right * soundAmplitude);
