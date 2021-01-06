@@ -8,8 +8,6 @@
     "targetName": "gbc",
     "targetPath": "bin",
 
-    "sourcePaths": ["src", "src/interfaces"],
-    "importPaths": ["src", "src/interfaces"],
     "dependencies": {
         "gtk-d:gtkd": ">=3.7.0",
         "derelict-al": ">=1.0.1",
