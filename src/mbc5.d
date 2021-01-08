@@ -20,6 +20,7 @@ final class Mbc5 : Mmu8bItf
     ubyte[128*1024] ram = 0xFF;
     uint romAddressMask = 0x00000000;
     uint ramAddressMask = 0x00000000;
+    bool hasRam = true;
 
 
     public:
@@ -49,7 +50,7 @@ final class Mbc5 : Mmu8bItf
         switch(address >> 8)
         {
             case 0x00: .. case 0x1F:
-                ramEnabled = (value & 0b00001111) == 0x0A;
+                ramEnabled = (value & 0b00001111) == 0x0A && hasRam;
                 break;
 
             case 0x20: .. case 0x2F:
@@ -77,7 +78,7 @@ final class Mbc5 : Mmu8bItf
     void connectCartridgeData(CartridgeDataItf cartridge)
     {
         static immutable int[] availableRomSizes = [65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608];
-        static immutable int[] availableRamSizes = [8192, 32768, 131072];
+        static immutable int[] availableRamSizes = [0, 8192, 32768, 131072];
 
         this.cartridge = cartridge;
 
@@ -87,6 +88,7 @@ final class Mbc5 : Mmu8bItf
         if(!availableRamSizes.canFind(cartridge.ramSize()))
             throw new Exception("Bad GB file: mismatch between the RAM size and the controller (MBC5)");
 
+        hasRam = cartridge.ramSize() > 0;
         romAddressMask = cartridge.romSize() - 1;
         ramAddressMask = cartridge.ramSize() - 1;
     }

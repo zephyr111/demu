@@ -82,7 +82,7 @@ final class GbcFile : CartridgeDataItf
         return header.oldLicenseeCode;
     }
 
-    CartridgeMmuType memoryControlerType()
+    CartridgeMmuType memoryControlerType() const
     {
         switch(header.cartridgeType)
         {
@@ -150,6 +150,13 @@ final class GbcFile : CartridgeDataItf
 
     uint ramSize() const
     {
+        if(memoryControlerType() == CartridgeMmuType.MBC2)
+        {
+            // The MBC2 chip specify that there is no ram, 
+            // although it actually includes a built-in RAM of 512 x 4 bits.
+            return 256;
+        }
+
         // Note: guess the check is already done
         return [0, 2, 8, 32, 128, 64][header.ramSize] * 1024;
     }

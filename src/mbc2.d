@@ -80,8 +80,9 @@ final class Mbc2 : Mmu8bItf
         if(!availableRomSizes.canFind(cartridge.romSize()))
             throw new Exception("Bad GB file: mismatch between the ROM size and the controller (MBC2)");
 
-        if(cartridge.ramSize() != 2048)
-            throw new Exception("Bad GB file: mismatch between the RAM size and the controller (MBC2)");
+        // The amount of RAM is unchecked as it must be set to 0 in the 
+        // cartridge header even though the controler actually have a 
+        // built-in RAM...
 
         romAddressMask = cartridge.romSize() - 1;
     }

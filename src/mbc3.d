@@ -27,6 +27,7 @@ final class Mbc3 : Mmu8bItf
     StopWatch chrono;
     uint romAddressMask = 0x00000000;
     uint ramAddressMask = 0x00000000;
+    bool hasRam = true;
 
 
     public:
@@ -51,7 +52,7 @@ final class Mbc3 : Mmu8bItf
             case 0xA0: .. case 0xBF:
                 if(ramAndRtcEnabled)
                 {
-                    if(upperBits <= 0x03)
+                    if(upperBits <= 0x03 && hasRam)
                     {
                         return ram[((upperBits << 13) | (address - 0xA000)) & ramAddressMask];
                     }
@@ -128,7 +129,7 @@ final class Mbc3 : Mmu8bItf
             case 0xA0: .. case 0xBF:
                 if(ramAndRtcEnabled)
                 {
-                    if(upperBits <= 0x03)
+                    if(upperBits <= 0x03 && hasRam)
                     {
                         ram[((upperBits << 13) | (address - 0xA000)) & ramAddressMask] = value;
                     }
@@ -190,7 +191,7 @@ final class Mbc3 : Mmu8bItf
     void connectCartridgeData(CartridgeDataItf cartridge)
     {
         static immutable int[] availableRomSizes = [65536, 131072, 262144, 524288, 1048576, 2097152];
-        static immutable int[] availableRamSizes = [2048, 8192, 32768];
+        static immutable int[] availableRamSizes = [0, 2048, 8192, 32768];
 
         this.cartridge = cartridge;
 
@@ -200,6 +201,7 @@ final class Mbc3 : Mmu8bItf
         if(!availableRamSizes.canFind(cartridge.ramSize()))
             throw new Exception("Bad GB file: mismatch between the RAM size and the controller (MBC3)");
 
+        hasRam = cartridge.ramSize() > 0;
         romAddressMask = cartridge.romSize() - 1;
         ramAddressMask = cartridge.ramSize() - 1;
     }
