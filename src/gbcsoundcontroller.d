@@ -1,13 +1,10 @@
 module gbcsoundcontroller;
 
-pragma(msg, "TODO: import useless");
 import std.stdio;
-import std.range;
-import std.array;
 import std.math;
 import std.conv;
 import std.random;
-import std.algorithm;
+import std.algorithm.comparison;
 import std.format;
 
 import interfaces.mmu8b;

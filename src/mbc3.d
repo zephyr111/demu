@@ -1,6 +1,5 @@
 module mbc3;
 
-pragma(msg, "TODO: import useless");
 import std.stdio;
 import std.algorithm.comparison;
 import std.algorithm.searching;

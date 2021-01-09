@@ -1,17 +1,14 @@
 module gbcserialport;
 
-pragma(msg, "TODO: import useless");
 import std.stdio;
 import std.string;
-import std.algorithm;
-import std.conv;
+import std.algorithm.comparison;
+import std.algorithm.iteration;
 import std.ascii;
 import std.range;
 
-import interfaces.gpu;
 import interfaces.cpu;
 import interfaces.mmu8b;
-import interfaces.renderer;
 
 
 final class GbcSerialPort : Mmu8bItf

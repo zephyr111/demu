@@ -1,20 +1,14 @@
 module gui;
 
-pragma(msg, "TODO: import useless");
 import std.stdio;
-import std.concurrency;
-import std.string;
-import std.datetime;
 import std.algorithm.comparison;
+import std.datetime;
 import core.time;
-import core.thread;
 
 import gtk.MainWindow;
-//import gdk.Pixbuf;
 import gdk.Keysyms;
 import gdk.Event;
 import gtk.Image;
-import gtk.Button;
 import gtk.VBox;
 import gtk.Main;
 import gtk.Widget;
@@ -23,7 +17,6 @@ import gtk.MenuBar;
 import gtk.Menu;
 import gtk.MenuItem;
 import gtk.FileChooserDialog;
-import gtk.FileChooserIF;
 import glib.Timeout;
 import cairo.Context;
 import cairo.ImageSurface;

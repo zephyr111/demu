@@ -1,10 +1,9 @@
 module gbcgpu;
 
-pragma(msg, "TODO: import useless");
 import std.stdio;
-import std.string;
-import std.algorithm;
-import std.conv;
+import std.algorithm.iteration;
+import std.algorithm.sorting;
+import std.format;
 import std.range;
 
 import interfaces.gpu;

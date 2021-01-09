@@ -1,13 +1,7 @@
 module gbc;
 
-pragma(msg, "TODO: import useless");
 import std.stdio;
-import core.thread;
-import core.time;
-import std.concurrency;
-import gtk.Main;
 import std.conv;
-import std.math;
 
 import interfaces.cartridgedata;
 import interfaces.mmu8b;
@@ -25,7 +19,6 @@ import mbc1;
 import mbc2;
 import mbc3;
 import mbc5;
-import gui;
 
 
 // Composite component
@@ -46,7 +39,6 @@ final class Gbc
     GbcJoystick joystick;
     GbcSerialPort serialPort;
 
-    Tid frontendTid;
     int clock;
     bool running;
 
