@@ -50,7 +50,7 @@ final class Mbc5 : Mmu8bItf
         switch(address >> 8)
         {
             case 0x00: .. case 0x1F:
-                ramEnabled = (value & 0b00001111) == 0x0A && hasRam;
+                ramEnabled = value == 0x0A && hasRam;
                 break;
 
             case 0x20: .. case 0x2F:
