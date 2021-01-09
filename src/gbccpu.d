@@ -699,7 +699,6 @@ final class GbcCpu : CpuItf
             case 0xE6: assembly!"AND ubyte"; clockTaken = 8; break;
             case 0xE7: assembly!"RST 0x20"; clockTaken = 16; break;
             case 0xE8: assembly!"ADD sp, byte"; clockTaken = 16; break;
-            pragma(msg, "TODO: cf. issue with JP HL or JP [HL]");
             case 0xE9: assembly!"JP hl"; clockTaken = 4; break;
             case 0xEA: assembly!"LD [ushort], a"; clockTaken = 16; break;
             //case 0xEB: No instruction
