@@ -1,6 +1,7 @@
 module nonembc;
 
 import std.stdio;
+import std.algorithm.searching;
 import interfaces.cartridgedata;
 import interfaces.mmu8b;
 
@@ -10,6 +11,8 @@ final class NoneMbc : Mmu8bItf
     private:
 
     CartridgeDataItf cartridge;
+    ubyte[8*1024] ram = 0xFF;
+    bool hasRam = true;
 
 
     public:
@@ -22,7 +25,9 @@ final class NoneMbc : Mmu8bItf
                 return cartridge.rawContent[address];
 
             case 0xA0: .. case 0xBF:
-                return cartridge.rawContent[address]; // valid address ?
+                if(hasRam)
+                    return ram[address - 0xA000];
+                return 0xFF;
 
             default:
                 throw new Exception("Execution failure: Out of memory access (read)");
@@ -40,7 +45,8 @@ final class NoneMbc : Mmu8bItf
                 break;
 
             case 0xA0: .. case 0xBF:
-                cartridge.rawContent[address] = value;
+                if(hasRam)
+                    ram[address - 0xA000] = value;
                 break;
 
             default:
@@ -50,7 +56,17 @@ final class NoneMbc : Mmu8bItf
 
     void connectCartridgeData(CartridgeDataItf cartridge)
     {
+        static immutable int[] availableRamSizes = [0, 8192];
+
         this.cartridge = cartridge;
+
+        if(cartridge.romSize() != 32768)
+            throw new Exception("Bad GB file: mismatch between the ROM size and the controller");
+
+        if(!availableRamSizes.canFind(cartridge.ramSize()))
+            throw new Exception("Bad GB file: mismatch between the RAM size and the controller");
+
+        hasRam = cartridge.ramSize() > 0;
     }
 
     static CartridgeMmuType type()
