@@ -71,7 +71,10 @@ final class Mbc5 : Mmu8bItf
                 break;
 
             default:
-                throw new Exception(format("Execution failure: Out of memory access (write, address: %0.4X)", address));
+                pragma(msg, "Writting on forbidden memory (reserved area) is ignored");
+                writeln("WARNING: forbidden memory write access (reserved area)");
+                //throw new Exception(format("Execution failure: Out of memory access (write, address: %0.4X)", address));
+                break;
         }
     }
 
