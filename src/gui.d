@@ -2,7 +2,10 @@ module gui;
 
 import std.stdio;
 import std.algorithm.comparison;
+import std.algorithm.searching;
 import std.datetime;
+import std.file;
+import std.uri;
 import core.time;
 
 import gtk.MainWindow;
@@ -17,6 +20,10 @@ import gtk.MenuBar;
 import gtk.Menu;
 import gtk.MenuItem;
 import gtk.FileChooserDialog;
+import gtk.TargetEntry;
+import gtk.TargetList;
+import gtk.MessageDialog;
+import glib.URI;
 import glib.Timeout;
 import cairo.Context;
 import cairo.ImageSurface;
@@ -75,7 +82,7 @@ final class Gui : MainWindow
         openRomItem.addOnActivate(s => openFile);
         fileMenu.append(openRomItem);
         auto closeRomItem = new MenuItem("_Close ROM");
-        closeRomItem.addOnActivate(s => stopGbc);
+        closeRomItem.addOnActivate((s) { if(gbc !is null) stopGbc(); });
         fileMenu.append(closeRomItem);
         auto quitItem = new MenuItem("_Quit");
         quitItem.addOnActivate(s => quit);
@@ -114,6 +121,37 @@ final class Gui : MainWindow
         box.packStart(renderArea, true, true, 0);
 
         add(box);
+
+        // Drag and drop of ROMs
+        TargetEntry[] acceptedTypes = [new TargetEntry("text/uri-list", GtkTargetFlags.OTHER_APP, 0)];
+        renderArea.dragDestSet(GtkDestDefaults.ALL, acceptedTypes, GdkDragAction.COPY);
+
+        renderArea.addOnDragDataReceived((context, x, y, selectionData, info, time, widget)
+        {
+            string[] uriList = selectionData.getUris();
+
+            if(uriList.length != 1)
+            {
+                printError("Too many file to open");
+                return;
+            }
+
+            string hostname;
+            const string uri = uriList[0].decode;
+            const string filename = URI.filenameFromUri(uriList[0], hostname);
+
+            // Check the URI to filename conversion worked
+            if(!filename.exists())
+            {
+                printError(format!"File \"%s\" not found"(filename));
+                return;
+            }
+
+            if(gbc !is null)
+                stopGbc();
+
+            startGbc(filename);
+        });
 
         addOnKeyPress(&keyPressed);
         addOnKeyRelease(&keyReleased);
@@ -160,9 +198,20 @@ final class Gui : MainWindow
 
     private:
 
-    void startGbc(string filename)
+    bool startGbc(string filename)
     {
-        gbc = new Gbc(filename);
+        assert(gbc is null);
+
+        try
+        {
+            gbc = new Gbc(filename);
+        }
+        catch(Exception err)
+        {
+            printError(format!"Unable to start the ROM \"%s\":\n%s"(filename, err.msg));
+            return false;
+        }
+
         connectRenderer(gbc.renderer);
         connectJoystick(gbc.joystick);
 
@@ -173,17 +222,32 @@ final class Gui : MainWindow
 
         immutable uint coreDelay = max(1, 1000/coreFrequency);
         gbcTickUpdate = new Timeout(coreDelay, &gbcTickTimeout, GPriority.LOW);
+        return true;
     }
 
     void stopGbc()
     {
+        assert(gbc !is null);
+
         gbc.destroy();
-        gbc = null;
-        renderer = null;
-        joystick = null;
+
+        if(gbcTickUpdate !is null)
+            gbcTickUpdate.stop();
+
+        if(frameUpdate !is null)
+            frameUpdate.stop();
 
         chrono.stop();
         probeChrono.stop();
+
+        gbc = null;
+        renderer = null;
+        joystick = null;
+        gbcTickUpdate = null;
+        frameUpdate = null;
+
+        // Refresh the rendered area so it is cleaned
+        renderArea.queueDraw();
     }
 
     void openFile()
@@ -288,7 +352,7 @@ final class Gui : MainWindow
 
             clockSum += localMaxClock;
 
-            // Cut the émulation if its too slow
+            // Cut the emulation if it is too slow
             if(chrono.peek().usecs > 1_000_000 / coreFrequency)
                 break;
         }
@@ -328,11 +392,20 @@ final class Gui : MainWindow
             }
         }
 
+        if(event.key.keyval == GdkKeysyms.GDK_Escape)
+        {
+            quit();
+            return true;
+        }
+
         return false;
     }
 
     bool keyReleased(Event event, Widget sender)
     {
+        //if(this.isSensitive)
+        //    return false;
+
         if(joystick !is null)
         {
             switch(event.key.keyval)
@@ -352,13 +425,19 @@ final class Gui : MainWindow
             }
         }
 
-        if(event.key.keyval == GdkKeysyms.GDK_Escape)
-        {
-            quit();
-            return true;
-        }
-
         return false;
+    }
+
+    void printError(const string msg)
+    {
+        // Widgets must be manually disabled since GTK dialog popups are not fully modal...
+        this.setSensitive(false);
+
+        auto msgBox = new MessageDialog(this, GtkDialogFlags.DESTROY_WITH_PARENT, GtkMessageType.ERROR, GtkButtonsType.CLOSE, msg);
+        msgBox.run();
+        msgBox.destroy();
+
+        this.setSensitive(true);
     }
 };
 
