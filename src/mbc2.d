@@ -32,9 +32,9 @@ final class Mbc2 : Mmu8bItf
             case 0x40: .. case 0x7F:
                 return cartridge.rawContent[((romBank << 14) | (address - 0x4000)) & romAddressMask];
 
-            case 0xA0: .. case 0xA1:
+            case 0xA0: .. case 0xBF:
                 if(ramEnabled)
-                    return ram[address - 0xA000];
+                    return ram[(address - 0xA000) & 0x01FF];
                 return 0xFF;
 
             default:
@@ -46,21 +46,18 @@ final class Mbc2 : Mmu8bItf
     {
         switch(address >> 8)
         {
-            // RAM enable/disable
-            case 0x00: .. case 0x1F:
-                ramEnabled = (address & 0x0100) == 0;
-                break;
-
-            // ROM bank number
-            case 0x20: .. case 0x3F:
-                if((address & 0x0100) != 0)
+            // RAM enable/disable & ROM bank number
+            case 0x00: .. case 0x3F:
+                if((address & 0x0100) == 0)
+                    ramEnabled = (value & 0b00001111) == 0b00001010;
+                else
                     romBank = max(value & 0b00001111, 1);
                 break;
 
             // RAM
-            case 0xA0: .. case 0xA1:
+            case 0xA0: .. case 0xBF:
                 if(ramEnabled)
-                    ram[address - 0xA000] = value | 0b11110000;
+                    ram[(address - 0xA000) & 0x01FF] = value | 0b11110000;
                 break;
 
             default:
