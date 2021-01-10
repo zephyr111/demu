@@ -17,7 +17,8 @@ final class Mbc1 : Mmu8bItf
     bool ramEnabled = false;
     uint romBank = 1;
     uint upperBits = 0;
-    uint romModeMask = 0xFF;
+    uint romModeMaskBank1 = 0x00;
+    uint romModeMaskBank2 = 0xFF;
     uint ramModeMask = 0x00;
     ubyte[32*1024] ram = 0xFF;
     uint romAddressMask = 0x00000000;
@@ -32,10 +33,10 @@ final class Mbc1 : Mmu8bItf
         switch(address >> 8)
         {
             case 0x00: .. case 0x3F:
-                return cartridge.rawContent[address];
+                return cartridge.rawContent[(((upperBits & romModeMaskBank1) << 19) | address) & romAddressMask];
 
             case 0x40: .. case 0x7F:
-                return cartridge.rawContent[(((upperBits & romModeMask) << 19) | (romBank << 14) | (address - 0x4000)) & romAddressMask];
+                return cartridge.rawContent[(((upperBits & romModeMaskBank2) << 19) | (romBank << 14) | (address - 0x4000)) & romAddressMask];
 
             case 0xA0: .. case 0xBF:
                 if(ramEnabled)
@@ -52,11 +53,11 @@ final class Mbc1 : Mmu8bItf
         switch(address >> 8)
         {
             case 0x00: .. case 0x1F:
-                ramEnabled = (value & 0x0F) == 0x0A && hasRam;
+                ramEnabled = (value & 0b00001111) == 0b00001010 && hasRam;
                 break;
 
             case 0x20: .. case 0x3F:
-                romBank = max(value & 0x1F, 1);
+                romBank = max(value & 0b00011111, 1);
                 break;
 
             case 0x40: .. case 0x5F:
@@ -66,12 +67,14 @@ final class Mbc1 : Mmu8bItf
             case 0x60: .. case 0x7F:
                 if((value & 0b00000001) == 0)
                 {
-                    romModeMask = 0xFF;
+                    romModeMaskBank1 = 0x00;
+                    romModeMaskBank2 = 0xFF;
                     ramModeMask = 0x00;
                 }
                 else
                 {
-                    romModeMask = 0x00;
+                    romModeMaskBank1 = 0xFF;
+                    romModeMaskBank2 = 0xFF;
                     ramModeMask = 0xFF;
                 }
                 break;
@@ -88,7 +91,7 @@ final class Mbc1 : Mmu8bItf
 
     void connectCartridgeData(CartridgeDataItf cartridge)
     {
-        static immutable int[] availableRomSizes = [65536, 131072, 262144, 524288, 1048576, 2097152];
+        static immutable int[] availableRomSizes = [32768, 65536, 131072, 262144, 524288, 1048576, 2097152];
         static immutable int[] availableRamSizes = [0, 2048, 8192, 32768];
 
         this.cartridge = cartridge;

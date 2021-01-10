@@ -77,7 +77,7 @@ final class Mbc5 : Mmu8bItf
 
     void connectCartridgeData(CartridgeDataItf cartridge)
     {
-        static immutable int[] availableRomSizes = [65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608];
+        static immutable int[] availableRomSizes = [32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608];
         static immutable int[] availableRamSizes = [0, 8192, 32768, 131072];
 
         this.cartridge = cartridge;
