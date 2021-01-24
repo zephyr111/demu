@@ -5,6 +5,7 @@ import std.algorithm.comparison;
 import std.algorithm.searching;
 import std.datetime;
 import std.file;
+import std.format;
 import std.uri;
 import core.time;
 
